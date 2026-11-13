@@ -10,21 +10,13 @@ from pathlib import Path
 import pytest
 import torch
 import yaml
+from cuvis_ai_core.utils.node_registry import NodeRegistry
 
 from cuvis_ai_centroidnet.configs import PIPELINE_DIR
 
 pytestmark = pytest.mark.chain
 
-MANIFEST = Path(__file__).resolve().parents[1] / "plugins.yaml"
 COUNT_YAML = PIPELINE_DIR / "centroidnet_count.yaml"
-
-
-def _registry():
-    from cuvis_ai_core.utils.node_registry import NodeRegistry
-
-    registry = NodeRegistry()
-    registry.register_plugin(str(MANIFEST))
-    return registry
 
 
 def _disc_features(height: int, width: int, centre: tuple[int, int], radius: int, scale: float):
@@ -66,11 +58,11 @@ def test_votes_land_on_the_centre_in_row_and_column_order() -> None:
     assert count.tolist() == [1]
 
 
-def test_count_pipeline_runs_at_inference_with_only_a_cube() -> None:
+def test_count_pipeline_runs_at_inference_with_only_a_cube(registry: NodeRegistry) -> None:
     from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
     from cuvis_ai_schemas.enums import ExecutionStage
 
-    pipeline = CuvisPipeline.load_pipeline(str(COUNT_YAML), node_registry=_registry())
+    pipeline = CuvisPipeline.load_pipeline(str(COUNT_YAML), node_registry=registry)
     generator = torch.Generator().manual_seed(0)
     batch = {
         "cube": torch.rand(2, 32, 40, 61, generator=generator),
@@ -84,11 +76,11 @@ def test_count_pipeline_runs_at_inference_with_only_a_cube() -> None:
     assert out[("Heads", "centroid_vectors")].shape == (2, 32, 40, 2)
 
 
-def test_count_pipeline_survives_save_and_reload(tmp_path: Path) -> None:
+def test_count_pipeline_survives_save_and_reload(tmp_path: Path, registry: NodeRegistry) -> None:
     from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
     from cuvis_ai_schemas.enums import ExecutionStage
 
-    pipeline = CuvisPipeline.load_pipeline(str(COUNT_YAML), node_registry=_registry())
+    pipeline = CuvisPipeline.load_pipeline(str(COUNT_YAML), node_registry=registry)
     generator = torch.Generator().manual_seed(1)
     batch = {
         "cube": torch.rand(1, 32, 40, 61, generator=generator),
@@ -100,7 +92,7 @@ def test_count_pipeline_survives_save_and_reload(tmp_path: Path) -> None:
     restored = CuvisPipeline.load_pipeline(
         str(tmp_path / "p.yaml"),
         weights_path=str(tmp_path / "p.pt"),
-        node_registry=_registry(),
+        node_registry=registry,
     )
     after = restored.forward(batch=batch, stage=ExecutionStage.INFERENCE)
 

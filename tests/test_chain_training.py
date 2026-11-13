@@ -10,22 +10,14 @@ from pathlib import Path
 
 import pytest
 import torch
+from cuvis_ai_core.utils.node_registry import NodeRegistry
 from scenes import disc_instances
 
 from cuvis_ai_centroidnet.configs import PIPELINE_DIR
 
 pytestmark = pytest.mark.chain
 
-MANIFEST = Path(__file__).resolve().parents[1] / "plugins.yaml"
 TRAIN_YAML = PIPELINE_DIR / "centroidnet_fod_lentils_train.yaml"
-
-
-def _registry():
-    from cuvis_ai_core.utils.node_registry import NodeRegistry
-
-    registry = NodeRegistry()
-    registry.register_plugin(str(MANIFEST))
-    return registry
 
 
 def _decode(instances: torch.Tensor, max_distance: float, window: int = 7):
@@ -205,11 +197,13 @@ def _batch(seed: int, frames: int = 2) -> dict[str, torch.Tensor]:
     }
 
 
-def test_training_pipeline_crops_in_training_and_keeps_full_frames_in_validation() -> None:
+def test_training_pipeline_crops_in_training_and_keeps_full_frames_in_validation(
+    registry: NodeRegistry,
+) -> None:
     from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
     from cuvis_ai_schemas.enums import ExecutionStage
 
-    pipeline = CuvisPipeline.load_pipeline(str(TRAIN_YAML), node_registry=_registry())
+    pipeline = CuvisPipeline.load_pipeline(str(TRAIN_YAML), node_registry=registry)
     batch = _batch(0)
 
     train = pipeline.forward(batch=batch, stage=ExecutionStage.TRAIN)
@@ -230,12 +224,12 @@ def test_training_pipeline_crops_in_training_and_keeps_full_frames_in_validation
 
 
 def test_training_pipeline_counts_at_inference_without_a_mask_after_a_reload(
-    tmp_path: Path,
+    tmp_path: Path, registry: NodeRegistry
 ) -> None:
     from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
     from cuvis_ai_schemas.enums import ExecutionStage
 
-    pipeline = CuvisPipeline.load_pipeline(str(TRAIN_YAML), node_registry=_registry())
+    pipeline = CuvisPipeline.load_pipeline(str(TRAIN_YAML), node_registry=registry)
     batch = _batch(1)
     del batch["mask"]
     with torch.no_grad():
@@ -245,7 +239,7 @@ def test_training_pipeline_counts_at_inference_without_a_mask_after_a_reload(
     restored = CuvisPipeline.load_pipeline(
         str(tmp_path / "p.yaml"),
         weights_path=str(tmp_path / "p.pt"),
-        node_registry=_registry(),
+        node_registry=registry,
     )
     with torch.no_grad():
         after = restored.forward(batch=batch, stage=ExecutionStage.INFERENCE)
@@ -261,13 +255,15 @@ def test_training_pipeline_counts_at_inference_without_a_mask_after_a_reload(
     assert torch.equal(after[("Count", "count")], before[("Count", "count")])
 
 
-def test_the_evaluation_pass_of_the_framework_reports_the_pooled_metrics() -> None:
+def test_the_evaluation_pass_of_the_framework_reports_the_pooled_metrics(
+    registry: NodeRegistry,
+) -> None:
     """evaluate_split reduces the metric node once per pass, as the trainer does per epoch."""
     from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
     from cuvis_ai_core.training.evaluation import evaluate_split
     from cuvis_ai_schemas.enums import ExecutionStage
 
-    pipeline = CuvisPipeline.load_pipeline(str(TRAIN_YAML), node_registry=_registry())
+    pipeline = CuvisPipeline.load_pipeline(str(TRAIN_YAML), node_registry=registry)
     metrics_node = {node.name: node for node in pipeline.nodes}["Metrics"]
     loader = [_batch(2, frames=1), _batch(3, frames=2)]
 
