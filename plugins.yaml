@@ -123,7 +123,12 @@ capabilities:
       shape: [-1, -1, -1, 1]
       optional: false
       description: 'Loss weight per pixel [B, H, W, 1]: 0 around objects cut by the edge'
-  doc_summary: Turn an instance map into centre vectors, border vectors and loss weights.
+    object_mask:
+      dtype: int32
+      shape: [-1, -1, -1]
+      optional: false
+      description: 'Class target [B, H, W]: 1 on object pixels, 0 on background'
+  doc_summary: 'Turn an instance map into the training targets: two vector fields, mask, weights.'
 - class_name: cuvis_ai_centroidnet.node.metrics.CentroidDetectionMetrics
   category: metric
   tags: [detection, evaluation]

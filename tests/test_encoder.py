@@ -200,9 +200,22 @@ def test_port_contract(scene: torch.Tensor) -> None:
     assert out["centroid_vectors"].shape == (2, 24, 30, 2)
     assert out["border_vectors"].shape == (2, 24, 30, 2)
     assert out["weights"].shape == (2, 24, 30, 1)
+    assert out["object_mask"].shape == (2, 24, 30)
     for name, spec in InstanceVectorFieldEncoder.OUTPUT_SPECS.items():
-        assert out[name].dtype == spec.dtype == torch.float32
+        expected = torch.int32 if name == "object_mask" else torch.float32
+        assert out[name].dtype == spec.dtype == expected
         assert not out[name].requires_grad
+
+
+def test_the_object_mask_is_one_on_every_instance_whatever_its_id() -> None:
+    """The class target of a two-class loss: object against background."""
+    instances = disc_instances(12, 14, [(3, 3, 2), (8, 9, 2)])
+    instances[instances == 2] = 40
+    instances[0, 0] = -3
+    out = _encode(instances, max_distance=6.0)
+
+    assert out["object_mask"].unique().tolist() == [0, 1]
+    assert torch.equal(out["object_mask"][0] == 1, instances > 0)
 
 
 def test_no_border_vector_is_longer_than_the_vote_range(scene: torch.Tensor) -> None:

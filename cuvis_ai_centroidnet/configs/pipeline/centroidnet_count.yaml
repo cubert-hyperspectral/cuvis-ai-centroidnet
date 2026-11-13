@@ -3,6 +3,8 @@ metadata:
   description: Count objects in a hyperspectral cube with CentroidNetV2 voting; needs no labels
   author: Cubert GmbH
 
+# The label-free part of centroidnet_fod_lentils_train.yaml with the same node names and
+# hyperparameters, so the weights of a pipeline trained with that config load into this one.
 # CU3SDataNode, Standardize and the two vote nodes are builtin cuvis-ai nodes.
 plugins:
 - unet
@@ -23,19 +25,24 @@ nodes:
     eps_mode: add
 
 # num_classes is the number of output planes: 4 vector planes and 2 class logits.
+# Frames larger than tile_size are processed in overlapping tiles.
 - name: Backbone
   class_name: cuvis_ai_unet.node.dynunet.DynUNet
   hparams:
     mode: "2d"
     in_channels: 61
     num_classes: 6
-    features: [16, 32, 64]
+    features: [32, 64, 128, 256]
+    tile_size: 192
+    tile_overlap: 0.5
+    tile_gaussian: true
+    tile_batch: 8
 
 # max_distance has to equal the value the network was trained with.
 - name: Heads
   class_name: cuvis_ai_centroidnet.node.heads.CentroidNetHeads
   hparams:
-    max_distance: 40.0
+    max_distance: 48.0
 
 # The heads emit (y, x) vectors, so the accumulator reads them as "yx".
 - name: Votes
@@ -46,13 +53,13 @@ nodes:
 - name: Peaks
   class_name: cuvis_ai.node.spatial.LocalMaximaSuppression
   hparams:
-    window: 7
+    window: 15
 
 # Choose min_votes on a validation split (examples/fod_lentils/select_threshold.py).
 - name: Count
   class_name: cuvis_ai_centroidnet.node.count.VotePeakCount
   hparams:
-    min_votes: 30.0
+    min_votes: 100.0
 
 connections:
 - source: DataSource.outputs.cube

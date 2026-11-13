@@ -50,7 +50,7 @@ def _nearest_centroid(
 
 
 class InstanceVectorFieldEncoder(Node):
-    """Turn an instance map into centre vectors, border vectors and loss weights.
+    """Turn an instance map into the training targets: two vector fields, mask, weights.
 
     This is the target encoding of CentroidNetV2 (Section 3.3.2 of the paper). For every
     pixel of a frame, background included:
@@ -76,6 +76,10 @@ class InstanceVectorFieldEncoder(Node):
     frame or of a training crop has its centroid in the wrong place, so those pixels are
     left out of ``VectorFieldLoss``. Pixels with a zero target keep weight 1. For this to
     work on crops, crop the cube and the instance map together and encode afterwards.
+
+    ``object_mask`` is 1 on every instance pixel and 0 on background: the target of the
+    class logits for the two classes of the paper (object and background), in the form a
+    cross-entropy loss node takes.
 
     The node needs the labels, so it runs in training, validation and test only. It has no
     gradient, and it cannot be exported: the number of instances and of their border
@@ -147,6 +151,11 @@ class InstanceVectorFieldEncoder(Node):
             shape=(-1, -1, -1, 1),
             description="Loss weight per pixel [B, H, W, 1]: 0 around objects cut by the edge",
         ),
+        "object_mask": PortSpec(
+            dtype=torch.int32,
+            shape=(-1, -1, -1),
+            description="Class target [B, H, W]: 1 on object pixels, 0 on background",
+        ),
     }
 
     def __init__(
@@ -163,10 +172,15 @@ class InstanceVectorFieldEncoder(Node):
 
     @torch.no_grad()
     def forward(self, instances: Tensor, **_: Any) -> dict[str, Tensor]:
-        """Return the two target vector fields and the loss weights of every frame."""
+        """Return the target vector fields, the loss weights and the object mask."""
         frames = [self._encode_frame(frame) for frame in instances]
         centre, border, weights = (torch.stack(parts) for parts in zip(*frames, strict=True))
-        return {"centroid_vectors": centre, "border_vectors": border, "weights": weights}
+        return {
+            "centroid_vectors": centre,
+            "border_vectors": border,
+            "weights": weights,
+            "object_mask": (instances > 0).to(torch.int32),
+        }
 
     def _encode_frame(self, frame: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         """Encode one ``[H, W]`` instance map."""
