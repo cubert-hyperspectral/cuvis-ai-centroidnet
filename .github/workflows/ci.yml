@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags-ignore:
+      - "v*.*.*"
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Sibling packages of the chain tests. They ship as git tags, not on PyPI, and are pinned by
+  # commit (a tag can move, a commit cannot).
+  # cuvis-ai: the commit that has VectorFieldVoteAccumulator and LocalMaximaSuppression. Replace
+  # this pin with a version floor in the dev extra once a cuvis-ai release ships both nodes.
+  CUVIS_AI_REF: 1d744bbe780e44d5791f0e85799632f916c7851a
+  # cuvis-ai-unet v0.5.0 (DynUNet, CrossEntropyLoss).
+  CUVIS_AI_UNET_REF: b41d53a9b391c8d953167626e5df31ff928a0d4d
+  # cuvis-ai-augment v0.5.0 (AugmentationCompose, RandomForegroundBiasedCrop).
+  CUVIS_AI_AUGMENT_REF: e44a71de5ca0bc7ffe527647919fd9844c63a1d9
+
+jobs:
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v3
+      # --locked uses the committed uv.lock. The chain tests need the sibling packages and run
+      # in their own job below.
+      - name: Run tests
+        run: |
+          uv run --locked --extra dev pytest tests/ -m "not slow and not chain" -v --tb=long -ra \
+            --cov=cuvis_ai_centroidnet \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=70
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  chain:
+    name: Chain tests (DynUNet and vote nodes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v3
+      # The dev extra brings the released cuvis-ai with all its dependencies; the pinned commits
+      # go on top without their dependencies. `uv run --no-sync` keeps them: a plain `uv run`
+      # would put the locked cuvis-ai release back.
+      - name: Install the environment and the pinned sibling packages
+        run: |
+          uv sync --locked --extra dev
+          uv pip install --no-deps \
+            "cuvis-ai @ git+https://github.com/cubert-hyperspectral/cuvis-ai.git@${CUVIS_AI_REF}" \
+            "cuvis-ai-unet @ git+https://github.com/cubert-hyperspectral/cuvis-ai-unet.git@${CUVIS_AI_UNET_REF}" \
+            "cuvis-ai-augment @ git+https://github.com/cubert-hyperspectral/cuvis-ai-augment.git@${CUVIS_AI_AUGMENT_REF}"
+      - name: Run the chain tests
+        run: uv run --no-sync pytest tests/ -m chain -v --tb=long -ra
+
+  lint:
+    name: Ruff (lint + format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v3
+      - name: Check formatting
+        run: uv run --locked --extra dev ruff format --check cuvis_ai_centroidnet tests examples
+      - name: Run ruff
+        run: uv run --locked --extra dev ruff check cuvis_ai_centroidnet tests examples
+
+  typecheck:
+    name: Type checking
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v3
+      # Non-blocking: torch stubs are incomplete; surface issues without gating CI.
+      - name: Run mypy
+        run: uv run --locked --extra dev mypy cuvis_ai_centroidnet/ --config-file pyproject.toml || true
+
+  security:
+    name: Security scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v3
+      # Non-blocking: a transitive CVE that cannot be patched without breaking compatibility
+      # must not block a plugin PR. The job surfaces it and does not gate.
+      - name: Run pip-audit
+        run: uv run --locked --extra dev pip-audit --strict --desc on || true
+      # Non-blocking: a baseline written on Windows uses backslash paths that a Linux runner's
+      # scan does not match.
+      - name: Run detect-secrets
+        run: uv run --locked --extra dev detect-secrets scan --baseline .secrets.baseline || true
+      - name: Run bandit
+        run: uv run --locked --extra dev bandit -r cuvis_ai_centroidnet/ -c pyproject.toml || true
+
+  build:
+    name: Build and validate
+    needs: [test, chain, lint, typecheck, security]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v3
+      - name: Build distributions
+        run: uv build --no-sources
+      - name: Validate distributions
+        run: uv run --no-sources --with twine twine check dist/*

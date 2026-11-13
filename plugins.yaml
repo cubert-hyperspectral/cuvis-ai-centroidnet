@@ -1,0 +1,153 @@
+# cuvis-ai-centroidnet: bare plugin manifest (one yaml = one plugin).
+#
+# Local-path source for development: `path` is resolved relative to THIS file.
+# For a frozen install replace `path` with
+#   repo: "https://github.com/cubert-hyperspectral/cuvis-ai-centroidnet.git"
+#   tag:  "v0.1.0"
+# The palette metadata below is generated: `python -m scripts.emit_metadata --manifest plugins.yaml`.
+name: centroidnet
+package_name: cuvis-ai-centroidnet
+path: "."
+capabilities:
+- class_name: cuvis_ai_centroidnet.node.heads.CentroidNetHeads
+  category: transform
+  tags: [detection, differentiable, onnx, segmentation, torch]
+  icon_svg: "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\" stroke=\"#6FAE5C\" stroke-width=\"2.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n  <path d=\"M52 26a20 20 0 0 0-36 0\"/>\n  <path d=\"M52 16v10h-10\"/>\n  <path d=\"M12 38a20 20 0 0 0 36 0\"/>\n  <path d=\"M12 48v-10h10\"/>\n</svg>\n"
+  input_specs:
+    features:
+      dtype: float32
+      shape: [-1, -1, -1, -1]
+      optional: false
+      description: 'Backbone output [B, H, W, 4 + K]: centre y, x; border y, x; K logits'
+  output_specs:
+    centroid_vectors:
+      dtype: float32
+      shape: [-1, -1, -1, 2]
+      optional: false
+      description: Vector to the nearest object centre in pixels [B, H, W, 2] as (y, x)
+    border_vectors:
+      dtype: float32
+      shape: [-1, -1, -1, 2]
+      optional: false
+      description: Vector to the border of that object in pixels [B, H, W, 2] as (y, x)
+    logits:
+      dtype: float32
+      shape: [-1, -1, -1, -1]
+      optional: false
+      description: Per-pixel class logits [B, H, W, K]
+  doc_summary: Split a backbone output into centre vectors, border vectors and class logits.
+- class_name: cuvis_ai_centroidnet.node.count.VotePeakCount
+  category: transform
+  tags: [detection, onnx, postprocessing, torch]
+  icon_svg: "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\" stroke=\"#6FAE5C\" stroke-width=\"2.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n  <path d=\"M52 26a20 20 0 0 0-36 0\"/>\n  <path d=\"M52 16v10h-10\"/>\n  <path d=\"M12 38a20 20 0 0 0 36 0\"/>\n  <path d=\"M12 48v-10h10\"/>\n</svg>\n"
+  input_specs:
+    peaks:
+      dtype: float32
+      shape: [-1, -1, -1, 1]
+      optional: false
+      description: 'Suppressed vote map [B, H, W, 1]: votes at local maxima, 0 elsewhere'
+  output_specs:
+    count:
+      dtype: int32
+      shape: [-1]
+      optional: false
+      description: Number of peaks with at least min_votes votes, per image [B]
+  doc_summary: Count the vote peaks that reach a threshold, one number per image.
+- class_name: cuvis_ai_centroidnet.node.losses.VectorFieldLoss
+  category: loss
+  tags: [differentiable, onnx, regression, torch, training]
+  icon_svg: "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\" stroke=\"#9A5DD4\" stroke-width=\"2.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n  <path d=\"M10 14v40h44\"/>\n  <path d=\"M14 18c8 0 12 8 18 18s12 14 22 14\"/>\n  <path d=\"M48 44l6 6-6 6\" transform=\"translate(0 -6)\"/>\n</svg>\n"
+  input_specs:
+    predictions:
+      dtype: float32
+      shape: [-1, -1, -1, 2]
+      optional: false
+      description: Predicted vectors in pixels [B, H, W, 2]
+    targets:
+      dtype: float32
+      shape: [-1, -1, -1, 2]
+      optional: false
+      description: Target vectors in pixels [B, H, W, 2]
+    weights:
+      dtype: float32
+      shape: [-1, -1, -1, 1]
+      optional: true
+      description: Per-pixel weight of the mean [B, H, W, 1]; 0 leaves a pixel out
+  output_specs:
+    loss:
+      dtype: float32
+      shape: []
+      optional: false
+      description: Scalar loss value
+  doc_summary: Mean Euclidean distance between a predicted and a target vector field.
+- class_name: cuvis_ai_centroidnet.node.instances.ConnectedComponentInstances
+  category: transform
+  tags: [mask, numpy, preprocessing, training]
+  icon_svg: "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\" stroke=\"#6FAE5C\" stroke-width=\"2.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n  <path d=\"M52 26a20 20 0 0 0-36 0\"/>\n  <path d=\"M52 16v10h-10\"/>\n  <path d=\"M12 38a20 20 0 0 0 36 0\"/>\n  <path d=\"M12 48v-10h10\"/>\n</svg>\n"
+  input_specs:
+    mask:
+      dtype: int32
+      shape: [-1, -1, -1]
+      optional: false
+      description: Class-id mask [B, H, W], 0 = background
+  output_specs:
+    instances:
+      dtype: int32
+      shape: [-1, -1, -1]
+      optional: false
+      description: 'Instance map [B, H, W]: ids 1..N per frame, 0 = background'
+  doc_summary: Turn a class mask into an instance map by connected components.
+- class_name: cuvis_ai_centroidnet.node.encoder.InstanceVectorFieldEncoder
+  category: transform
+  tags: [detection, preprocessing, segmentation, torch, training]
+  icon_svg: "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\" stroke=\"#6FAE5C\" stroke-width=\"2.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n  <path d=\"M52 26a20 20 0 0 0-36 0\"/>\n  <path d=\"M52 16v10h-10\"/>\n  <path d=\"M12 38a20 20 0 0 0 36 0\"/>\n  <path d=\"M12 48v-10h10\"/>\n</svg>\n"
+  input_specs:
+    instances:
+      dtype: int32
+      shape: [-1, -1, -1]
+      optional: false
+      description: 'Instance map [B, H, W]: one positive id per object, 0 = background'
+  output_specs:
+    centroid_vectors:
+      dtype: float32
+      shape: [-1, -1, -1, 2]
+      optional: false
+      description: Target vector to the nearest object centre in pixels [B, H, W, 2] (y, x)
+    border_vectors:
+      dtype: float32
+      shape: [-1, -1, -1, 2]
+      optional: false
+      description: Target vector to the border of that object in pixels [B, H, W, 2] (y, x)
+    weights:
+      dtype: float32
+      shape: [-1, -1, -1, 1]
+      optional: false
+      description: 'Loss weight per pixel [B, H, W, 1]: 0 around objects cut by the edge'
+    object_mask:
+      dtype: int32
+      shape: [-1, -1, -1]
+      optional: false
+      description: 'Class target [B, H, W]: 1 on object pixels, 0 on background'
+  doc_summary: 'Turn an instance map into the training targets: two vector fields, mask, weights.'
+- class_name: cuvis_ai_centroidnet.node.metrics.CentroidDetectionMetrics
+  category: metric
+  tags: [detection, evaluation]
+  icon_svg: "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\" stroke=\"#C9615A\" stroke-width=\"2.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n  <path d=\"M10 14v40h44\"/>\n  <rect x=\"16\" y=\"38\" width=\"8\" height=\"12\"/>\n  <rect x=\"28\" y=\"28\" width=\"8\" height=\"22\"/>\n  <rect x=\"40\" y=\"18\" width=\"8\" height=\"32\"/>\n</svg>\n"
+  input_specs:
+    peaks:
+      dtype: float32
+      shape: [-1, -1, -1, 1]
+      optional: false
+      description: 'Suppressed vote map [B, H, W, 1]: votes at local maxima, 0 elsewhere'
+    instances:
+      dtype: int32
+      shape: [-1, -1, -1]
+      optional: false
+      description: 'Instance map [B, H, W]: one positive id per object, 0 = background'
+  output_specs:
+    metrics:
+      dtype: ''
+      shape: []
+      optional: false
+      description: List of Metric objects
+  doc_summary: Precision, recall, F1 and count error of vote peaks against labelled instances.

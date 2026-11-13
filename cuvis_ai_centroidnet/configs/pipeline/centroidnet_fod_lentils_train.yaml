@@ -1,0 +1,168 @@
+metadata:
+  name: centroidnet_fod_lentils_train
+  description: Train CentroidNetV2 vector fields on Industrial FOD lentils, score the vote peaks, count without labels
+  author: Cubert GmbH
+
+# CU3SDataNode, Standardize and the two vote nodes are builtin cuvis-ai nodes.
+plugins:
+- unet
+- augment
+- centroidnet
+
+# Stages: the label nodes (Instances, Encoder, the three losses, Metrics) run only where a
+# mask exists. At inference the graph is DataSource, Norm, Augment (identity), Backbone,
+# Heads, Votes, Peaks, Count, so the trained artifact counts objects in a bare cube.
+nodes:
+- name: DataSource
+  class_name: cuvis_ai.node.data.CU3SDataNode
+  hparams: {}
+
+# Every frame by its own per-band statistics; nothing to fit. Upstream of the crop, so the
+# statistics describe the full frame in training and at inference alike.
+- name: Norm
+  class_name: cuvis_ai.node.pretreatments.standardize.Standardize
+  hparams:
+    axis: spatial
+    ddof: 0
+    eps: 1.0e-06
+    eps_mode: add
+
+# The set has class masks and no object ids: every connected region of one class is one
+# object. Runs on the full frame, before the crop.
+- name: Instances
+  class_name: cuvis_ai_centroidnet.node.instances.ConnectedComponentInstances
+  hparams:
+    connectivity: 8
+
+# Crops cube and instance map together at TRAIN, identity otherwise. The mask port carries
+# the instance map, so the targets are encoded on the crop. Four crops per frame: a frame
+# is 1000 x 1080 x 61 and is read once per step.
+- name: Augment
+  class_name: cuvis_ai_augment.node.compose.AugmentationCompose
+  hparams:
+    seed: 0
+    transforms:
+    - type: RandomForegroundBiasedCrop
+      size: [192, 192]
+      fg_percent: 0.7
+      probabilistic: true
+      samples_per_input: 4
+    - type: RandomHorizontalFlip
+      prob: 0.5
+    - type: RandomVerticalFlip
+      prob: 0.5
+
+# num_classes is the number of output planes: 4 vector planes and 2 class logits.
+# tile_size equals the training crop; full frames are tiled outside TRAIN.
+- name: Backbone
+  class_name: cuvis_ai_unet.node.dynunet.DynUNet
+  hparams:
+    mode: "2d"
+    in_channels: 61
+    num_classes: 6
+    features: [32, 64, 128, 256]
+    tile_size: 192
+    tile_overlap: 0.5
+    tile_gaussian: true
+    tile_batch: 8
+
+# max_distance: no object of the training split has an inscribed radius above 47 pixels
+# (half of the shorter bounding-box side), so 48 keeps the interior of every object.
+# The same value in Heads, Encoder and both vector losses.
+- name: Heads
+  class_name: cuvis_ai_centroidnet.node.heads.CentroidNetHeads
+  hparams:
+    max_distance: 48.0
+
+- name: Encoder
+  class_name: cuvis_ai_centroidnet.node.encoder.InstanceVectorFieldEncoder
+  hparams:
+    max_distance: 48.0
+
+- name: CentreLoss
+  class_name: cuvis_ai_centroidnet.node.losses.VectorFieldLoss
+  hparams:
+    max_distance: 48.0
+    weight: 1.0
+
+- name: BorderLoss
+  class_name: cuvis_ai_centroidnet.node.losses.VectorFieldLoss
+  hparams:
+    max_distance: 48.0
+    weight: 1.0
+
+# Object against background, on the two class logits. The encoder supplies the target.
+- name: ClassLoss
+  class_name: cuvis_ai_unet.node.losses.CrossEntropyLoss
+  hparams:
+    weight: 1.0
+
+# The heads emit (y, x) vectors, so the accumulator reads them as "yx".
+- name: Votes
+  class_name: cuvis_ai.node.vote_accumulation.VectorFieldVoteAccumulator
+  hparams:
+    order: yx
+
+# The reference implementation uses a window of 7 for bacterial colonies; the objects
+# here are several times larger.
+- name: Peaks
+  class_name: cuvis_ai.node.spatial.LocalMaximaSuppression
+  hparams:
+    window: 15
+
+# All thresholds are scored in one pass; examples/fod_lentils/select_threshold.py picks
+# one on the validation split. match_radius: the mean half of the shorter bounding-box
+# side of the training objects is 14.3 pixels.
+- name: Metrics
+  class_name: cuvis_ai_centroidnet.node.metrics.CentroidDetectionMetrics
+  hparams:
+    thresholds: [10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0]
+    match_radius: 15.0
+
+# Placeholder until select_threshold.py writes the chosen value into the artifact.
+- name: Count
+  class_name: cuvis_ai_centroidnet.node.count.VotePeakCount
+  hparams:
+    min_votes: 100.0
+
+connections:
+- source: DataSource.outputs.cube
+  target: Norm.inputs.cube
+- source: DataSource.outputs.mask
+  target: Instances.inputs.mask
+- source: Norm.outputs.cube
+  target: Augment.inputs.cube
+- source: Instances.outputs.instances
+  target: Augment.inputs.mask
+- source: Augment.outputs.cube
+  target: Backbone.inputs.data
+- source: Backbone.outputs.logits
+  target: Heads.inputs.features
+- source: Augment.outputs.mask
+  target: Encoder.inputs.instances
+- source: Heads.outputs.centroid_vectors
+  target: CentreLoss.inputs.predictions
+- source: Encoder.outputs.centroid_vectors
+  target: CentreLoss.inputs.targets
+- source: Encoder.outputs.weights
+  target: CentreLoss.inputs.weights
+- source: Heads.outputs.border_vectors
+  target: BorderLoss.inputs.predictions
+- source: Encoder.outputs.border_vectors
+  target: BorderLoss.inputs.targets
+- source: Encoder.outputs.weights
+  target: BorderLoss.inputs.weights
+- source: Heads.outputs.logits
+  target: ClassLoss.inputs.logits
+- source: Encoder.outputs.object_mask
+  target: ClassLoss.inputs.targets
+- source: Heads.outputs.centroid_vectors
+  target: Votes.inputs.vectors
+- source: Votes.outputs.scores
+  target: Peaks.inputs.scores
+- source: Peaks.outputs.scores
+  target: Metrics.inputs.peaks
+- source: Augment.outputs.mask
+  target: Metrics.inputs.instances
+- source: Peaks.outputs.scores
+  target: Count.inputs.peaks
