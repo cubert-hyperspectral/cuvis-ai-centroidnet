@@ -224,6 +224,19 @@ def test_no_border_vector_is_longer_than_the_vote_range(scene: torch.Tensor) -> 
     assert float(out["border_vectors"].norm(dim=-1).max()) <= 4.0
 
 
+def test_a_centre_vector_can_be_longer_than_the_vote_range() -> None:
+    """max_distance limits the border vector; the centre lies further away, by the radius."""
+    instances = disc_instances(21, 21, [(10, 10, 2)]).unsqueeze(0)
+
+    out = InstanceVectorFieldEncoder(max_distance=3.0).forward(instances=instances)
+
+    # (10, 15) is three pixels beyond the rim pixel (10, 12) and five from the centre.
+    assert out["border_vectors"][0, 10, 15].tolist() == [0.0, -3.0]
+    assert out["centroid_vectors"][0, 10, 15].tolist() == [0.0, -5.0]
+    # One pixel further out the border is out of range, so both vectors are zero.
+    assert out["centroid_vectors"][0, 10, 16].tolist() == [0.0, 0.0]
+
+
 def test_a_small_pairwise_budget_gives_the_same_result(scene: torch.Tensor) -> None:
     """The distance matrices are cut into chunks; the chunk size must not change anything."""
     whole = InstanceVectorFieldEncoder(max_distance=9.0).forward(instances=scene.unsqueeze(0))

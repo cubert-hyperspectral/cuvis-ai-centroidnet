@@ -30,16 +30,18 @@ class CentroidNetHeads(Node):
     ``order="yx"``.
 
     The backbone predicts the vectors divided by ``max_distance`` (the vote range in
-    pixels), which keeps its regression targets within ``[-1, 1]``; this node multiplies
-    them back, so both vector outputs are in pixels. The logits pass through unchanged.
-    No activation is applied to any plane: vectors have to be able to be negative.
+    pixels); this node multiplies them back, so both vector outputs are in pixels. The
+    division keeps the border targets within ``[-1, 1]``. A centre target can be longer:
+    the encoder limits the distance to the border, and the centre lies beyond the border
+    by up to the size of the object. The logits pass through unchanged. No activation is
+    applied to any plane: vectors have to be able to be negative.
 
     Parameters
     ----------
     max_distance : float
-        Vote range in pixels, the longest vector the encoder keeps. Must be positive and
-        finite, and equal to the ``max_distance`` of ``InstanceVectorFieldEncoder`` and
-        ``VectorFieldLoss`` in the same pipeline.
+        Vote range in pixels, the longest border vector the encoder keeps. Must be
+        positive and finite, and equal to the ``max_distance`` of
+        ``InstanceVectorFieldEncoder`` and ``VectorFieldLoss`` in the same pipeline.
 
     Raises
     ------

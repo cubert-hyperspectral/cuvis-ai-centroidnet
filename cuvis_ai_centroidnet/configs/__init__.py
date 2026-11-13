@@ -1,4 +1,4 @@
-"""Pipeline and trainrun configs shipped with the package."""
+"""Pipeline configs shipped with the package."""
 
 from __future__ import annotations
 

@@ -18,7 +18,7 @@ env:
   # cuvis-ai: the commit that has VectorFieldVoteAccumulator and LocalMaximaSuppression. Replace
   # this pin with a version floor in the dev extra once a cuvis-ai release ships both nodes.
   CUVIS_AI_REF: 1d744bbe780e44d5791f0e85799632f916c7851a
-  # cuvis-ai-unet v0.5.0 (DynUNet, CrossEntropyLoss with class folding).
+  # cuvis-ai-unet v0.5.0 (DynUNet, CrossEntropyLoss).
   CUVIS_AI_UNET_REF: b41d53a9b391c8d953167626e5df31ff928a0d4d
   # cuvis-ai-augment v0.5.0 (AugmentationCompose, RandomForegroundBiasedCrop).
   CUVIS_AI_AUGMENT_REF: e44a71de5ca0bc7ffe527647919fd9844c63a1d9

@@ -70,10 +70,11 @@ dev = [
   # (see the `chain` job in .github/workflows/ci.yml).
   "cuvis-ai[onnx]>=0.22.8",
 ]
-# Runtime packages of examples/fod_lentils: `uv sync --extra examples`. cuvis-ai-unet and
-# cuvis-ai-augment ship as git tags, not on PyPI, so they cannot live in this extra; the README
-# gives the two install lines. `cuvis-ai-dataloader[cu3s]` needs a Cuvis SDK of the matching
-# version on the machine.
+# Runtime packages of examples/fod_lentils. Sync it together with the dev extra
+# (`uv sync --extra dev --extra examples`) before the sibling packages go on top: a later
+# `uv sync` removes them again. cuvis-ai-unet and cuvis-ai-augment ship as git tags, not on
+# PyPI, so they cannot live in this extra; the README gives the install lines.
+# `cuvis-ai-dataloader[cu3s]` needs a Cuvis SDK of the matching version on the machine.
 examples = [
   "cuvis-ai-dataloader[cu3s,coco]>=0.9.1",
   "cuvis-ai>=0.22.8",

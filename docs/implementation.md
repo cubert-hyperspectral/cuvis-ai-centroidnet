@@ -67,7 +67,7 @@ trained and available on the `border_vectors` port for that later step.
 |---|---|---|---|
 | Number of output planes | 6 in Section 3.1, "five planes" in Section 3.2.1 | `4 + num_classes` | `4 + K`, `K = 2` in the shipped configs |
 | Scale of the vectors | Not stated | Targets divided by `max_dist` for training | The backbone predicts vectors divided by `max_distance`; `CentroidNetHeads` multiplies them back to pixels, `VectorFieldLoss` divides the distance by `max_distance` |
-| Clipping of the targets | "Roughly twice the average radius of the target objects" (Section 3.3.2); the rule is not given | Both vectors set to zero where the border vector is longer than `max_dist` | The same rule, parameter `max_distance` |
+| Clipping of the targets | "Roughly twice the average radius of the target objects" (Section 3.3.2); the rule is not given | Both vectors set to zero where the border vector is longer than `max_dist` | The same rule, parameter `max_distance`. It limits the border vector; a centre vector that is kept can be longer, by up to the distance from the border to the centroid |
 | Which pixels are border pixels | Not stated | A 2 x 2 variance filter on the instance map | An instance pixel with a 4-neighbour of another id or outside the frame |
 | Equal distances | Not stated | Left to `argmin` | Lower instance id for centroids, first border pixel in row-major order |
 | Rounding of a vote to a pixel | Algorithm 1 adds the vector to the coordinate | `np.round` | Each vector component is rounded half to even (`torch.round`). A centre between pixels therefore spreads its votes over the neighbouring pixels |
@@ -104,5 +104,7 @@ elements. In training it sees crops, so the cost there is far lower.
 
 - Full frames are processed in overlapping tiles by `DynUNet` outside training. The tiles
   are blended plane by plane, vector planes included. The chain tests cover a frame of
-  240 x 260 pixels; there is no test that compares tiled and untiled vector fields.
+  240 x 260 pixels; there is no test that compares tiled and untiled vector fields. The
+  vote threshold is chosen on validation frames that pass through the same tiles, so it
+  is tuned to whatever the blending does to the votes.
 - No trained weights ship with the plugin.

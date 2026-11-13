@@ -56,7 +56,7 @@ plugins:
 
 ## Example: foreign objects on lentils
 
-`examples/fod_lentils/` trains the pipeline on the public `Industrial_FOD_Lentils` set (1136 frames of 1000 x 1080 pixels and 61 bands, 53 GiB) or on the 69-frame `Demo_Industrial_FOD_Lentils`. Both are downloaded with `cuvis_ai_core.data.public_datasets.PublicDatasets`. The frames are read from cu3s recordings, which needs the [Cuvis SDK](https://www.cubert-hyperspectral.com/) and the dataloader plugin:
+`examples/fod_lentils/` trains the pipeline on the public `Industrial_FOD_Lentils` set (1136 frames of 1000 x 1080 pixels and 61 bands, 53 GiB) or on the 69-frame `Demo_Industrial_FOD_Lentils`. Download either with `cuvis_ai_core.data.public_datasets.PublicDatasets`. The scripts read the frames from cu3s recordings, which needs the [Cuvis SDK](https://www.cubert-hyperspectral.com/) and the dataloader plugin:
 
 ```bash
 uv pip install "cuvis-ai-dataloader[cu3s,coco]>=0.9.1" "click>=8.1"
@@ -69,7 +69,9 @@ cd examples/fod_lentils
 uv run --no-sync python train.py --universe-csv <lentils>/universe.csv --splits-json <lentils>/splits/adaclip.json --out runs/lentils
 ```
 
-After the fit the framework scores the validation and the test split. The script takes the vote threshold with the highest F1 on validation, stores it with the pipeline (`threshold.json` and the `Count` node of `pipeline.yaml`) and writes the test scores at that threshold to `test_metrics.json`. `select_threshold.py` and `evaluate.py` repeat these two steps for a saved pipeline.
+`--out` has to be a new folder for every run: the script refuses a folder that already holds a trained pipeline, so the threshold and scores of one model never end up next to the weights of another.
+
+After the fit the framework scores the validation and the test split. The script takes the vote threshold with the highest F1 on validation, stores it with the pipeline (`pipeline.threshold.json` and the `Count` node of `pipeline.yaml`) and writes the test scores at that threshold to `pipeline.test_metrics.json`. `select_threshold.py` and `evaluate.py` repeat these two steps for a saved pipeline.
 
 A full-frame pass runs the backbone on overlapping tiles, so scoring a split takes a GPU. Results of a full training run are not part of this version yet.
 
@@ -79,6 +81,8 @@ A full-frame pass runs the backbone on overlapping tiles, so scoring a split tak
 uv run --no-sync pytest tests/ -m "not chain"   # the nodes on their own
 uv run --no-sync pytest tests/ -m chain         # with DynUNet, the crop node and the vote nodes
 ```
+
+The chain tests need the three sibling packages from the Installation section. With the dev extra alone they fail at import: the cuvis-ai release it installs (0.22.8) does not have the two vote nodes yet.
 
 ## Method and references
 
