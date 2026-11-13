@@ -17,10 +17,13 @@ from types import ModuleType, SimpleNamespace
 
 import click
 import pytest
+import torch
 import yaml
 from click.testing import CliRunner
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import Context
 
-from cuvis_ai_centroidnet.node.metrics import PER_THRESHOLD_METRICS
+from cuvis_ai_centroidnet.node.metrics import PER_THRESHOLD_METRICS, CentroidDetectionMetrics
 
 pytestmark = pytest.mark.unit
 
@@ -374,3 +377,38 @@ def test_the_run_record_holds_the_reader_options(
         "sdk_cuda": True,
         "cuda_cubes": False,
     }
+
+
+def _scored_node(votes: float) -> CentroidDetectionMetrics:
+    """A metric node that saw one frame: one object, one peak with ``votes`` at its centre."""
+    node = CentroidDetectionMetrics(thresholds=[10.0, 50.0], match_radius=3.0)
+    instances = torch.zeros(1, 9, 9, dtype=torch.int32)
+    instances[0, 3:6, 3:6] = 1
+    peaks = torch.zeros(1, 9, 9, 1)
+    peaks[0, 4, 4, 0] = votes
+    node.forward(peaks=peaks, instances=instances, context=Context(stage=ExecutionStage.VAL))
+    return node
+
+
+@pytest.mark.parametrize(("votes", "best"), [(30.0, 1.0), (60.0, 1.0), (5.0, 0.0)])
+def test_the_best_f1_over_the_thresholds_is_logged_after_validation(
+    engine: ModuleType, votes: float, best: float
+) -> None:
+    """The epoch to keep is chosen by what the vote map finds, at whatever threshold."""
+    logged: dict[str, float] = {}
+    module = SimpleNamespace(log=lambda name, value: logged.update({name: value}))
+
+    engine.BestValidationF1(_scored_node(votes)).on_validation_epoch_end(None, module)
+
+    assert logged == {engine.BEST_F1: best}
+
+
+def test_nothing_is_logged_for_a_validation_pass_without_frames(engine: ModuleType) -> None:
+    """A node that saw no batch has no scores; a logged 0 would look like a bad epoch."""
+    logged: dict[str, float] = {}
+    module = SimpleNamespace(log=lambda name, value: logged.update({name: value}))
+    node = CentroidDetectionMetrics(thresholds=[10.0], match_radius=3.0)
+
+    engine.BestValidationF1(node).on_validation_epoch_end(None, module)
+
+    assert logged == {}

@@ -33,6 +33,7 @@ from cuvis_ai_schemas.training.optimizer import OptimizerConfig
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 
 from cuvis_ai_centroidnet.configs import PIPELINE_DIR
+from cuvis_ai_centroidnet.node.metrics import metric_name
 from cuvis_ai_centroidnet.selection import best_threshold, scores_by_threshold
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -43,6 +44,8 @@ LOSS_NODES = ("CentreLoss", "BorderLoss", "ClassLoss")
 REQUIRED_NODES = ("Backbone", *LOSS_NODES, "Metrics", "Count")
 ARTIFACT_NAME = "pipeline.yaml"
 THRESHOLD_ENDING = "threshold.json"
+# The value --save-best-val keeps the best epoch by.
+BEST_F1 = "val_best_f1"
 
 
 def data_options(command: Callable[..., Any]) -> Callable[..., Any]:
@@ -243,6 +246,27 @@ class EpochLog(Callback):
         click.echo(f"[{stamp}] epoch {trainer.current_epoch:>3} | {seconds:7.1f} s | {values}")
 
 
+class BestValidationF1(Callback):
+    """Log the highest F1 over the vote thresholds after every validation pass.
+
+    The validation loss cannot choose the epoch to keep. Most pixels of a frame have no
+    vector to predict, so a network that predicts none anywhere has a low loss and finds
+    no object. The F1 of the vote peaks says what the epoch is good for; the threshold
+    that reaches it is chosen afterwards, on the same split.
+    """
+
+    def __init__(self, metrics_node: Any) -> None:
+        self._node = metrics_node
+
+    def on_validation_epoch_end(self, trainer: Any, pl_module: Any) -> None:
+        """Log the value before the trainer reduces and resets the metric objects."""
+        pooled = self._node.pooled_metrics()
+        if not pooled:
+            return
+        scores = [pooled[metric_name("f1", value)].compute() for value in self._node.thresholds]
+        pl_module.log(BEST_F1, max(float(score) for score in scores))
+
+
 def train(
     pipeline: CuvisPipeline,
     datamodule: Any,
@@ -263,7 +287,7 @@ def train(
     it, settings in ``run.json``) and the detection scores of the validation and the test
     split, in the form ``score_split`` returns. The framework scores both splits after
     every fit, on the weights that are saved: with ``save_best_val`` those of the epoch
-    with the lowest validation loss, otherwise those of the last epoch.
+    whose vote peaks reach the highest F1 on validation, otherwise those of the last epoch.
 
     Validation during training runs on full frames in tiles, which is slow: it is off
     unless ``val_every`` is positive.
@@ -286,11 +310,12 @@ def train(
     post_fit = PostFitCallback(metric_nodes=[nodes["Metrics"]])
     callbacks: list[Callback] = [EpochLog(), post_fit]
     if save_best_val:
-        callbacks.append(
+        callbacks += [
+            BestValidationF1(nodes["Metrics"]),
             ModelCheckpoint(
-                dirpath=str(out_dir / "checkpoints"), monitor="val_loss", mode="min", save_top_k=1
-            )
-        )
+                dirpath=str(out_dir / "checkpoints"), monitor=BEST_F1, mode="max", save_top_k=1
+            ),
+        ]
     trainer = GradientTrainer(
         pipeline=pipeline,
         datamodule=datamodule,

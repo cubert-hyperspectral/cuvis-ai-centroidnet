@@ -55,7 +55,7 @@ import click
 @click.option(
     "--save-best-val",
     is_flag=True,
-    help="Save the epoch with the lowest validation loss; needs --val-every.",
+    help="Save the validated epoch with the highest F1 of the vote peaks; needs --val-every.",
 )
 @click.option("--accelerator", default="auto", show_default=True)
 @click.option(
