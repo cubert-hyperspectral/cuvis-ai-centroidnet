@@ -1,0 +1,69 @@
+metadata:
+  name: centroidnet_count
+  description: Count objects in a hyperspectral cube with CentroidNetV2 voting; needs no labels
+  author: Cubert GmbH
+
+# CU3SDataNode, Standardize and the two vote nodes are builtin cuvis-ai nodes.
+plugins:
+- unet
+- centroidnet
+
+nodes:
+- name: DataSource
+  class_name: cuvis_ai.node.data.CU3SDataNode
+  hparams: {}
+
+# Every frame by its own per-band statistics; nothing to fit.
+- name: Norm
+  class_name: cuvis_ai.node.pretreatments.standardize.Standardize
+  hparams:
+    axis: spatial
+    ddof: 0
+    eps: 1.0e-06
+    eps_mode: add
+
+# num_classes is the number of output planes: 4 vector planes and 2 class logits.
+- name: Backbone
+  class_name: cuvis_ai_unet.node.dynunet.DynUNet
+  hparams:
+    mode: "2d"
+    in_channels: 61
+    num_classes: 6
+    features: [16, 32, 64]
+
+# max_distance has to equal the value the network was trained with.
+- name: Heads
+  class_name: cuvis_ai_centroidnet.node.heads.CentroidNetHeads
+  hparams:
+    max_distance: 40.0
+
+# The heads emit (y, x) vectors, so the accumulator reads them as "yx".
+- name: Votes
+  class_name: cuvis_ai.node.vote_accumulation.VectorFieldVoteAccumulator
+  hparams:
+    order: yx
+
+- name: Peaks
+  class_name: cuvis_ai.node.spatial.LocalMaximaSuppression
+  hparams:
+    window: 7
+
+# Choose min_votes on a validation split (examples/fod_lentils/select_threshold.py).
+- name: Count
+  class_name: cuvis_ai_centroidnet.node.count.VotePeakCount
+  hparams:
+    min_votes: 30.0
+
+connections:
+- source: DataSource.outputs.cube
+  target: Norm.inputs.cube
+- source: Norm.outputs.cube
+  target: Backbone.inputs.data
+- source: Backbone.outputs.logits
+  target: Heads.inputs.features
+- source: Heads.outputs.centroid_vectors
+  target: Votes.inputs.vectors
+- source: Votes.outputs.scores
+  target: Peaks.inputs.scores
+- source: Peaks.outputs.scores
+  target: Count.inputs.peaks
