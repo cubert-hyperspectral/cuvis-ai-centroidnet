@@ -71,8 +71,9 @@ def data_options(command: Callable[..., Any]) -> Callable[..., Any]:
             "--read-threads",
             default=4,
             show_default=True,
-            type=click.IntRange(min=0),
-            help="Threads that read the frames of a batch at once; 0 reads them one by one.",
+            type=click.IntRange(min=0, max=16),
+            help="Threads that read the frames of a batch at once. Reading one frame at a time "
+            "needs 0 here and --read-ahead 0.",
         ),
         click.option(
             "--read-ahead",
@@ -85,7 +86,8 @@ def data_options(command: Callable[..., Any]) -> Callable[..., Any]:
             "--coherent-batches/--mixed-batches",
             default=True,
             show_default=True,
-            help="Fill a batch from one recording. Mixed batches draw from all recordings, "
+            help="Take the frames recording by recording, so a batch stays inside one "
+            "recording, or two where one ends. Mixed batches draw from all recordings, "
             "which reopens one for almost every frame unless --max-open-sessions covers them.",
         ),
         click.option(
@@ -122,8 +124,9 @@ def make_datamodule(
     threads take the place of worker processes.
 
     Opening a recording takes seconds and only ``max_open_sessions`` stay open. With
-    ``coherent_batches`` every batch comes from one recording and an epoch goes through
-    the recordings one after the other, in a new order each epoch. Without it a shuffled
+    ``coherent_batches`` an epoch goes through the recordings one after the other, in a new
+    order each epoch, so a batch stays inside one recording, or two where one ends (the
+    frames within a recording are shuffled as well). Without it a shuffled
     batch draws from more recordings than are open and the loader reopens one for almost
     every frame.
     """
@@ -187,11 +190,14 @@ def default_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+@functools.cache
 def git_commit() -> str | None:
     """Return the commit of this checkout, or ``None`` when git gives no answer.
 
     The commit is a note in the run files. A missing, failing or hanging git must not end
-    a run that has just finished its fit.
+    a run that has just finished its fit. It is read once per process, and ``train`` and
+    ``score_split`` ask for it before their long step: the files of a run name the code
+    that ran, also when the checkout moves on in the meantime.
     """
     try:
         done = subprocess.run(
@@ -272,6 +278,7 @@ def train(
         )
     if save_best_val and val_every <= 0:
         raise click.UsageError("--save-best-val needs --val-every N, so that validation runs.")
+    git_commit()
     nodes = nodes_by_name(pipeline)
     out_dir.mkdir(parents=True, exist_ok=True)
     pipeline.unfreeze_nodes_by_name(["Backbone"])
@@ -357,6 +364,7 @@ def score_split(
     ``Metrics`` node the values that node reports, pooled over the split.
     ``limit_batches`` stops after that many batches, for a smoke run.
     """
+    git_commit()
     datamodule.setup(stage=None)
     loader, stage = {
         "val": (datamodule.val_dataloader, ExecutionStage.VAL),

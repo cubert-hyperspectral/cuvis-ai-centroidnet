@@ -42,6 +42,14 @@ def engine(example: Callable[[str], ModuleType]) -> ModuleType:
     return example("_engine")
 
 
+@pytest.fixture(autouse=True)
+def commit_not_remembered(engine: ModuleType) -> Iterator[None]:
+    """The engine reads the commit once per process; every test starts without one."""
+    engine.git_commit.cache_clear()
+    yield
+    engine.git_commit.cache_clear()
+
+
 def _row(f1: float, count_error: float) -> dict[str, float]:
     """The values of one vote threshold, as ``score_split`` returns them."""
     return dict.fromkeys(PER_THRESHOLD_METRICS, 0.0) | {"f1": f1, "count_error": count_error}
@@ -116,6 +124,21 @@ def test_the_commit_is_none_when_git_does_not_answer(
     monkeypatch.setattr(subprocess, "run", fail)
 
     assert engine.git_commit() is None
+
+
+def test_the_commit_stays_the_one_read_first(
+    engine: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A commit made while the fit runs does not belong in the files of that run."""
+    answers = iter(["aaa", "bbb"])
+
+    def answer(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout=next(answers))
+
+    monkeypatch.setattr(subprocess, "run", answer)
+
+    assert engine.git_commit() == "aaa"
+    assert engine.git_commit() == "aaa"
 
 
 def test_the_chosen_threshold_is_stored_with_the_artifact_and_read_back(
@@ -297,10 +320,11 @@ def test_every_script_passes_the_reader_options_on(
 
 
 @pytest.mark.parametrize("script", ["train", "select_threshold", "evaluate"])
-def test_more_frames_ahead_than_the_datamodule_allows_is_a_usage_error(
-    example: Callable[[str], ModuleType], tmp_path: Path, script: str
+@pytest.mark.parametrize(("option", "value"), [("--read-ahead", "9"), ("--read-threads", "17")])
+def test_a_reader_option_beyond_the_limit_of_the_datamodule_is_a_usage_error(
+    example: Callable[[str], ModuleType], tmp_path: Path, script: str, option: str, value: str
 ) -> None:
-    """Every frame read ahead is a whole cube in memory; the datamodule stops at 8."""
+    """The datamodule stops at 8 frames ahead and 16 threads, the threads only at the first read."""
     files = [tmp_path / name for name in ("universe.csv", "splits.json", "pipeline.yaml")]
     for path in files:
         path.write_text("", encoding="utf-8")
@@ -308,8 +332,45 @@ def test_more_frames_ahead_than_the_datamodule_allows_is_a_usage_error(
     arguments = ["--universe-csv", files[0], "--splits-json", files[1], *target]
 
     result = CliRunner().invoke(
-        example(script).main, [str(item) for item in arguments] + ["--read-ahead", "9"]
+        example(script).main, [str(item) for item in arguments] + [option, value]
     )
 
     assert result.exit_code == 2
-    assert "--read-ahead" in result.output
+    assert option in result.output
+
+
+def test_the_run_record_holds_the_reader_options(
+    example: Callable[[str], ModuleType],
+    engine: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Coherent batches change which frames share a step, so a result names how it was read."""
+    files = [tmp_path / name for name in ("universe.csv", "splits.json")]
+    for path in files:
+        path.write_text("", encoding="utf-8")
+    arguments = ["--universe-csv", files[0], "--splits-json", files[1], "--out", tmp_path / "run"]
+    seen: dict = {}
+
+    def stop(*_: object, run_meta: dict, **__: object) -> None:
+        seen.update(run_meta)
+        raise click.UsageError("stopped before the fit")
+
+    monkeypatch.setattr(engine, "load_pipeline", lambda *_, **__: None)
+    monkeypatch.setattr(engine, "make_datamodule", lambda *_, **__: None)
+    monkeypatch.setattr(engine, "train", stop)
+
+    result = CliRunner().invoke(
+        example("train").main, [str(item) for item in arguments] + ["--mixed-batches"]
+    )
+
+    assert "stopped before the fit" in result.output
+    assert seen["batch"] == 4
+    assert seen["reader"] == {
+        "max_open_sessions": 2,
+        "read_threads": 4,
+        "read_ahead": 4,
+        "coherent_batches": False,
+        "sdk_cuda": True,
+        "cuda_cubes": False,
+    }
