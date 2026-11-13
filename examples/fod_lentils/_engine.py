@@ -63,9 +63,30 @@ def data_options(command: Callable[..., Any]) -> Callable[..., Any]:
         click.option("--batch", default=4, show_default=True, help="Frames per batch."),
         click.option(
             "--max-open-sessions",
-            default=3,
+            default=2,
             show_default=True,
             help="cu3s recordings kept open per loader; each holds GPU memory with --sdk-cuda.",
+        ),
+        click.option(
+            "--read-threads",
+            default=4,
+            show_default=True,
+            type=click.IntRange(min=0),
+            help="Threads that read the frames of a batch at once; 0 reads them one by one.",
+        ),
+        click.option(
+            "--read-ahead",
+            default=4,
+            show_default=True,
+            type=click.IntRange(min=0, max=8),
+            help="Frames read while the model works on the batch before; each is a cube in memory.",
+        ),
+        click.option(
+            "--coherent-batches/--mixed-batches",
+            default=True,
+            show_default=True,
+            help="Fill a batch from one recording. Mixed batches draw from all recordings, "
+            "which reopens one for almost every frame unless --max-open-sessions covers them.",
         ),
         click.option(
             "--sdk-cuda/--no-sdk-cuda",
@@ -84,14 +105,27 @@ def make_datamodule(
     *,
     batch: int,
     max_open_sessions: int,
+    read_threads: int,
+    read_ahead: int,
+    coherent_batches: bool,
     sdk_cuda: bool,
     cuda_cubes: bool,
 ) -> Any:
     """Return the multi-file cu3s datamodule of the dataset.
 
-    The frames are read straight from the recordings; the batch ``mask`` holds the class
-    ids of the COCO annotations. ``num_workers`` stays 0: the Cuvis SDK reads in this
-    process.
+    The frames are read straight from the cu3s recordings, with no converted copy in
+    between; the batch ``mask`` holds the class ids of the COCO annotations.
+
+    Reading is what a training step waits for, so it runs on threads of this process:
+    ``read_threads`` read the frames of a batch at once and ``read_ahead`` frames are read
+    while the model works on the batch before. ``num_workers`` stays 0, because the
+    threads take the place of worker processes.
+
+    Opening a recording takes seconds and only ``max_open_sessions`` stay open. With
+    ``coherent_batches`` every batch comes from one recording and an epoch goes through
+    the recordings one after the other, in a new order each epoch. Without it a shuffled
+    batch draws from more recordings than are open and the loader reopens one for almost
+    every frame.
     """
     from cuvis_ai_core.data.splits_io import load_splits
     from cuvis_ai_dataloader.data import MultiCu3sDataModule
@@ -102,6 +136,9 @@ def make_datamodule(
         batch_size=batch,
         num_workers=0,
         max_open_sessions=max_open_sessions,
+        read_threads=read_threads,
+        read_ahead=read_ahead,
+        source_coherent_batches=coherent_batches,
         sdk_cuda=sdk_cuda,
         cuda_cubes=cuda_cubes,
     )

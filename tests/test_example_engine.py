@@ -196,3 +196,120 @@ def test_a_batch_limit_of_zero_is_a_usage_error(
 
     assert result.exit_code == 2
     assert "--limit-batches" in result.output
+
+
+@pytest.fixture()
+def datamodule_options(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Stand in for the dataloader plugin and record how its datamodule is built."""
+    recorded: list[dict] = []
+    plugin = ModuleType("cuvis_ai_dataloader.data")
+    plugin.MultiCu3sDataModule = lambda **options: recorded.append(options) or "datamodule"
+    monkeypatch.setitem(sys.modules, "cuvis_ai_dataloader", ModuleType("cuvis_ai_dataloader"))
+    monkeypatch.setitem(sys.modules, "cuvis_ai_dataloader.data", plugin)
+    monkeypatch.setattr("cuvis_ai_core.data.splits_io.load_splits", lambda path: f"splits:{path}")
+    return recorded
+
+
+def test_the_frames_are_read_from_the_recordings_on_reader_threads(
+    engine: ModuleType, datamodule_options: list[dict], tmp_path: Path
+) -> None:
+    """Reader threads work inside the training process, so there are no worker processes."""
+    universe, splits = tmp_path / "universe.csv", tmp_path / "splits.json"
+
+    module = engine.make_datamodule(
+        universe,
+        splits,
+        batch=4,
+        max_open_sessions=2,
+        read_threads=6,
+        read_ahead=3,
+        coherent_batches=True,
+        sdk_cuda=True,
+        cuda_cubes=False,
+    )
+
+    assert module == "datamodule"
+    assert datamodule_options == [
+        {
+            "universe_csv": str(universe),
+            "splits": f"splits:{splits}",
+            "batch_size": 4,
+            "num_workers": 0,
+            "max_open_sessions": 2,
+            "read_threads": 6,
+            "read_ahead": 3,
+            "source_coherent_batches": True,
+            "sdk_cuda": True,
+            "cuda_cubes": False,
+        }
+    ]
+
+
+READER_DEFAULTS = {
+    "max_open_sessions": 2,
+    "read_threads": 4,
+    "read_ahead": 4,
+    "coherent_batches": True,
+}
+
+
+@pytest.mark.parametrize("script", ["train", "select_threshold", "evaluate"])
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ([], READER_DEFAULTS),
+        (
+            ["--read-threads", "0", "--read-ahead", "0", "--mixed-batches"]
+            + ["--max-open-sessions", "5"],
+            {"max_open_sessions": 5, "read_threads": 0, "read_ahead": 0, "coherent_batches": False},
+        ),
+    ],
+)
+def test_every_script_passes_the_reader_options_on(
+    example: Callable[[str], ModuleType],
+    engine: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    script: str,
+    flags: list[str],
+    expected: dict,
+) -> None:
+    """A script that dropped one would read with the slow defaults of the datamodule."""
+    files = [tmp_path / name for name in ("universe.csv", "splits.json", "pipeline.yaml")]
+    for path in files:
+        path.write_text("", encoding="utf-8")
+    target = ["--out", tmp_path / "run"] if script == "train" else ["--artifact", files[2]]
+    arguments = ["--universe-csv", files[0], "--splits-json", files[1], *target, *flags]
+    seen: dict = {}
+
+    def stop(*_: object, **options: object) -> None:
+        seen.update(options)
+        raise click.UsageError("stopped before the recordings are opened")
+
+    monkeypatch.setattr(engine, "load_pipeline", lambda *_, **__: None)
+    monkeypatch.setattr(engine, "stored_threshold", lambda _: 30.0)
+    monkeypatch.setattr(engine, "make_datamodule", stop)
+
+    result = CliRunner().invoke(example(script).main, [str(item) for item in arguments])
+
+    assert "stopped before the recordings are opened" in result.output
+    assert {name: seen[name] for name in expected} == expected
+
+
+@pytest.mark.parametrize("script", ["train", "select_threshold", "evaluate"])
+def test_more_frames_ahead_than_the_datamodule_allows_is_a_usage_error(
+    example: Callable[[str], ModuleType], tmp_path: Path, script: str
+) -> None:
+    """Every frame read ahead is a whole cube in memory; the datamodule stops at 8."""
+    files = [tmp_path / name for name in ("universe.csv", "splits.json", "pipeline.yaml")]
+    for path in files:
+        path.write_text("", encoding="utf-8")
+    target = ["--out", tmp_path / "run"] if script == "train" else ["--artifact", files[2]]
+    arguments = ["--universe-csv", files[0], "--splits-json", files[1], *target]
+
+    result = CliRunner().invoke(
+        example(script).main, [str(item) for item in arguments] + ["--read-ahead", "9"]
+    )
+
+    assert result.exit_code == 2
+    assert "--read-ahead" in result.output

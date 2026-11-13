@@ -69,6 +69,8 @@ cd examples/fod_lentils
 uv run --no-sync python train.py --universe-csv <lentils>/universe.csv --splits-json <lentils>/splits/adaclip.json --out runs/lentils
 ```
 
+The frames come straight from the cu3s recordings; there is no converted copy of the data. Reading a frame takes longer than a training step, so the scripts read on threads: `--read-threads 4` reads the frames of a batch at once, and `--read-ahead 4` reads the next ones while the model works. Only `--max-open-sessions` recordings stay open and opening one takes seconds, so every batch comes from one recording (`--coherent-batches`) and an epoch goes through the recordings one after the other, in a new order each epoch. With batches of 4 on an RTX 5070 Ti laptop GPU the training loader alone reads about 10 frames per second this way, 5 with one thread, and 1 with batches mixed from all recordings (`--mixed-batches`).
+
 `--out` has to be a new folder for every run: the script refuses a folder that already holds a trained pipeline, so the threshold and scores of one model never end up next to the weights of another.
 
 After the fit the framework scores the validation and the test split. The script takes the vote threshold with the highest F1 on validation, stores it with the pipeline (`pipeline.threshold.json` and the `Count` node of `pipeline.yaml`) and writes the test scores at that threshold to `pipeline.test_metrics.json`. `select_threshold.py` and `evaluate.py` repeat these two steps for a saved pipeline.

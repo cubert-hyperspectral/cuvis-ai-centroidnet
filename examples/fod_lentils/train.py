@@ -5,7 +5,9 @@
 
 ``<lentils>`` is the download of ``Industrial_FOD_Lentils`` (or of the 69-frame
 ``Demo_Industrial_FOD_Lentils``) from ``cuvis_ai_core.data.public_datasets``. The frames
-are read from its cu3s recordings, which needs the Cuvis SDK.
+are read from its cu3s recordings, which needs the Cuvis SDK. They are read on threads of
+this process (``--read-threads``, ``--read-ahead``), and every batch comes from one
+recording (``--coherent-batches``), so the loader does not reopen recordings all the time.
 
 Every step reads ``--batch`` frames and cuts four foreground-biased 192 x 192 crops from
 each (set in the pipeline config). The result is ``<out>/pipeline.yaml`` with its weights
@@ -71,6 +73,9 @@ def main(
     splits_json: Path,
     batch: int,
     max_open_sessions: int,
+    read_threads: int,
+    read_ahead: int,
+    coherent_batches: bool,
     sdk_cuda: bool,
     cuda_cubes: bool,
     out: Path,
@@ -90,6 +95,9 @@ def main(
         splits_json,
         batch=batch,
         max_open_sessions=max_open_sessions,
+        read_threads=read_threads,
+        read_ahead=read_ahead,
+        coherent_batches=coherent_batches,
         sdk_cuda=sdk_cuda,
         cuda_cubes=cuda_cubes,
     )
@@ -109,6 +117,7 @@ def main(
             "universe_csv": str(universe_csv),
             "splits_json": str(splits_json),
             "batch": batch,
+            "coherent_batches": coherent_batches,
         },
     )
 
