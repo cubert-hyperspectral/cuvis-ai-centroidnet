@@ -107,7 +107,7 @@ class CentroidDetectionMetrics(Node):
        and a centroid that no peak took a false negative.
 
     The paper matches fitted object shapes to annotated shapes by intersection over
-    union (Section 4.4, Eq. 13 to 19). This node works on the centres alone, before any
+    union (Section 5.2, Eq. 13 to 19). This node works on the centres alone, before any
     shape is fitted, which is why it matches by distance. A centroid can lie outside a
     concave object; it is still the point the network was trained to vote for.
 
@@ -144,7 +144,8 @@ class CentroidDetectionMetrics(Node):
     ----------
     K. Dijkstra, J. van de Loosdrecht, W. A. Atsma, L. R. B. Schomaker, M. A. Wiering.
     "CentroidNetV2: A hybrid deep neural network for small-object segmentation and
-    counting." Neurocomputing 423 (2021), pages 490 to 505, Section 4.4, Eq. 12 to 19.
+    counting." Neurocomputing 423 (2021), pages 490 to 505, Section 3.3.1, Eq. 12, and
+    Section 5.2, Eq. 13 to 19.
     https://doi.org/10.1016/j.neucom.2020.10.075
     """
 
