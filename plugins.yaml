@@ -97,3 +97,30 @@ capabilities:
       optional: false
       description: 'Instance map [B, H, W]: ids 1..N per frame, 0 = background'
   doc_summary: Turn a class mask into an instance map by connected components.
+- class_name: cuvis_ai_centroidnet.node.encoder.InstanceVectorFieldEncoder
+  category: transform
+  tags: [detection, preprocessing, segmentation, torch, training]
+  icon_svg: "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\" stroke=\"#6FAE5C\" stroke-width=\"2.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n  <path d=\"M52 26a20 20 0 0 0-36 0\"/>\n  <path d=\"M52 16v10h-10\"/>\n  <path d=\"M12 38a20 20 0 0 0 36 0\"/>\n  <path d=\"M12 48v-10h10\"/>\n</svg>\n"
+  input_specs:
+    instances:
+      dtype: int32
+      shape: [-1, -1, -1]
+      optional: false
+      description: 'Instance map [B, H, W]: one positive id per object, 0 = background'
+  output_specs:
+    centroid_vectors:
+      dtype: float32
+      shape: [-1, -1, -1, 2]
+      optional: false
+      description: Target vector to the nearest object centre in pixels [B, H, W, 2] (y, x)
+    border_vectors:
+      dtype: float32
+      shape: [-1, -1, -1, 2]
+      optional: false
+      description: Target vector to the border of that object in pixels [B, H, W, 2] (y, x)
+    weights:
+      dtype: float32
+      shape: [-1, -1, -1, 1]
+      optional: false
+      description: 'Loss weight per pixel [B, H, W, 1]: 0 around objects cut by the edge'
+  doc_summary: Turn an instance map into centre vectors, border vectors and loss weights.
