@@ -12,9 +12,10 @@ each (set in the pipeline config). The result is ``<out>/pipeline.yaml`` with it
 in ``pipeline.pt``.
 
 After the fit the framework scores the validation and the test split. The vote threshold
-with the highest F1 on validation is stored with the artifact (``threshold.json`` and the
-``Count`` node), and the test scores at that threshold go to ``test_metrics.json``.
-``select_threshold.py`` and ``evaluate.py`` repeat the two steps for a saved artifact.
+with the highest F1 on validation is stored with the artifact (``pipeline.threshold.json``
+and the ``Count`` node), and the test scores at that threshold go to
+``pipeline.test_metrics.json``. ``select_threshold.py`` and ``evaluate.py`` repeat the two
+steps for a saved artifact.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ import click
     "--out",
     required=True,
     type=click.Path(file_okay=False, path_type=Path),
-    help="Folder for pipeline.yaml, pipeline.pt and run.json.",
+    help="New folder for pipeline.yaml, pipeline.pt and run.json; one folder per run.",
 )
 @click.option(
     "--pipeline",
@@ -56,9 +57,15 @@ import click
 )
 @click.option("--accelerator", default="auto", show_default=True)
 @click.option(
-    "--limit-train-batches", type=int, help="Stop each epoch after N batches (smoke runs)."
+    "--limit-train-batches",
+    type=click.IntRange(min=1),
+    help="Stop each epoch after N batches (smoke runs).",
 )
-@click.option("--limit-val-batches", type=int, help="Validate on N batches only (smoke runs).")
+@click.option(
+    "--limit-val-batches",
+    type=click.IntRange(min=1),
+    help="Validate on N batches only (smoke runs).",
+)
 def main(
     universe_csv: Path,
     splits_json: Path,

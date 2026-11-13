@@ -1,0 +1,198 @@
+"""The shared code of examples/fod_lentils: the checks that guard a saved artifact.
+
+The example scripts need the dataloader plugin and recordings to run end to end. These
+tests cover what can go wrong before and after that: a missing weights file, a folder that
+already holds a run, a threshold nobody scored, a git call that does not answer.
+"""
+
+from __future__ import annotations
+
+import importlib
+import json
+import subprocess
+import sys
+from collections.abc import Callable, Iterator
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+
+import click
+import pytest
+import yaml
+from click.testing import CliRunner
+
+from cuvis_ai_centroidnet.node.metrics import PER_THRESHOLD_METRICS
+
+pytestmark = pytest.mark.unit
+
+EXAMPLE_DIR = Path(__file__).resolve().parents[1] / "examples" / "fod_lentils"
+
+
+@pytest.fixture(scope="module")
+def example() -> Iterator[Callable[[str], ModuleType]]:
+    """Import a module of the example folder by its bare name, as the scripts do."""
+    sys.path.insert(0, str(EXAMPLE_DIR))
+    try:
+        yield importlib.import_module
+    finally:
+        sys.path.remove(str(EXAMPLE_DIR))
+
+
+@pytest.fixture()
+def engine(example: Callable[[str], ModuleType]) -> ModuleType:
+    return example("_engine")
+
+
+def _row(f1: float, count_error: float) -> dict[str, float]:
+    """The values of one vote threshold, as ``score_split`` returns them."""
+    return dict.fromkeys(PER_THRESHOLD_METRICS, 0.0) | {"f1": f1, "count_error": count_error}
+
+
+def _result(split: str, scores: dict[float, dict[str, float]]) -> dict:
+    return {"split": split, "frames": 3, "true_count": 5.0, "scores": scores}
+
+
+def _artifact(folder: Path) -> Path:
+    """A saved pipeline config with a ``Count`` node, without weights."""
+    artifact = folder / "pipeline.yaml"
+    content = {"nodes": [{"name": "Count", "hparams": {"min_votes": 100.0}}]}
+    artifact.write_text(yaml.safe_dump(content), encoding="utf-8")
+    return artifact
+
+
+def test_a_saved_artifact_without_its_weights_is_refused(
+    engine: ModuleType, tmp_path: Path
+) -> None:
+    """Without the weights the pipeline would be scored with a random backbone."""
+    artifact = _artifact(tmp_path)
+
+    with pytest.raises(click.UsageError, match=r"pipeline\.pt"):
+        engine.load_pipeline(artifact, trained=True)
+
+
+def test_training_into_a_folder_with_a_trained_pipeline_stops_before_the_fit(
+    engine: ModuleType, tmp_path: Path
+) -> None:
+    """The threshold and scores of the first run would stay next to the new weights."""
+    _artifact(tmp_path)
+
+    with pytest.raises(click.UsageError, match="already holds"):
+        engine.train(
+            None,
+            None,
+            out_dir=tmp_path,
+            epochs=1,
+            lr=1e-3,
+            accelerator="cpu",
+            val_every=0,
+            save_best_val=False,
+            limit_train_batches=None,
+            limit_val_batches=None,
+            run_meta={},
+        )
+
+
+def test_a_pipeline_without_the_node_names_of_the_example_is_refused(engine: ModuleType) -> None:
+    pipeline = SimpleNamespace(
+        nodes=[SimpleNamespace(name="Backbone"), SimpleNamespace(name="Count")]
+    )
+
+    with pytest.raises(click.UsageError, match="CentreLoss, BorderLoss, ClassLoss, Metrics"):
+        engine.nodes_by_name(pipeline)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [subprocess.TimeoutExpired(cmd="git", timeout=10), FileNotFoundError("git")],
+    ids=["timeout", "no git"],
+)
+def test_the_commit_is_none_when_git_does_not_answer(
+    engine: ModuleType, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """A slow or missing git must not end a run after the fit."""
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(subprocess, "run", fail)
+
+    assert engine.git_commit() is None
+
+
+def test_the_chosen_threshold_is_stored_with_the_artifact_and_read_back(
+    engine: ModuleType, tmp_path: Path
+) -> None:
+    artifact = _artifact(tmp_path)
+    result = _result("val", {10.0: _row(0.4, 0.5), 20.0: _row(0.8, 0.1), 50.0: _row(0.6, 0.2)})
+
+    chosen = engine.store_threshold(artifact, result)
+
+    assert chosen == 20.0
+    assert engine.stored_threshold(artifact) == 20.0
+    record = json.loads((tmp_path / "pipeline.threshold.json").read_text(encoding="utf-8"))
+    assert record["chosen_on"] == "val"
+    assert set(record["scores"]) == {"10", "20", "50"}
+    count = yaml.safe_load(artifact.read_text(encoding="utf-8"))["nodes"][0]
+    assert count["hparams"]["min_votes"] == 20.0
+    # Files are replaced as a whole; nothing half-written stays behind.
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "pipeline.threshold.json",
+        "pipeline.yaml",
+    ]
+
+
+def test_two_artifacts_in_one_folder_keep_their_own_threshold(
+    engine: ModuleType, tmp_path: Path
+) -> None:
+    """The result files carry the name of their artifact, not only that of the folder."""
+    first = _artifact(tmp_path)
+    second = tmp_path / "candidate.yaml"
+    second.write_text(first.read_text(encoding="utf-8"), encoding="utf-8")
+
+    engine.store_threshold(first, _result("val", {10.0: _row(0.8, 0.1), 50.0: _row(0.2, 0.9)}))
+    engine.store_threshold(second, _result("val", {10.0: _row(0.2, 0.9), 50.0: _row(0.8, 0.1)}))
+
+    assert engine.stored_threshold(first) == 10.0
+    assert engine.stored_threshold(second) == 50.0
+
+
+def test_scores_at_a_threshold_the_node_did_not_score_are_refused(
+    engine: ModuleType, tmp_path: Path
+) -> None:
+    artifact = _artifact(tmp_path)
+    result = _result("test", {10.0: _row(0.4, 0.5)})
+
+    with pytest.raises(click.UsageError, match="30"):
+        engine.store_metrics(artifact, result, 30.0)
+    assert not (tmp_path / "pipeline.test_metrics.json").exists()
+
+
+def test_the_scores_of_a_split_are_written_at_the_stored_threshold(
+    engine: ModuleType, tmp_path: Path
+) -> None:
+    artifact = _artifact(tmp_path)
+    result = _result("test", {10.0: _row(0.4, 0.5), 20.0: _row(0.8, 0.1)})
+
+    engine.store_metrics(artifact, result, 20.0)
+
+    record = json.loads((tmp_path / "pipeline.test_metrics.json").read_text(encoding="utf-8"))
+    assert record["min_votes"] == 20.0
+    assert record["f1"] == 0.8
+    assert record["true_count"] == 5.0
+
+
+@pytest.mark.parametrize("script", ["select_threshold", "evaluate"])
+def test_a_batch_limit_of_zero_is_a_usage_error(
+    example: Callable[[str], ModuleType], tmp_path: Path, script: str
+) -> None:
+    """Zero batches would give an empty evaluation with no scores to read."""
+    files = [tmp_path / name for name in ("universe.csv", "splits.json", "pipeline.yaml")]
+    for path in files:
+        path.write_text("", encoding="utf-8")
+    arguments = ["--universe-csv", files[0], "--splits-json", files[1], "--artifact", files[2]]
+
+    result = CliRunner().invoke(
+        example(script).main, [str(item) for item in arguments] + ["--limit-batches", "0"]
+    )
+
+    assert result.exit_code == 2
+    assert "--limit-batches" in result.output

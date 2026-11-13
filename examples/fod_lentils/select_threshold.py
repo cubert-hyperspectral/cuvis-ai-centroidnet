@@ -4,7 +4,7 @@
         --universe-csv <lentils>/universe.csv --splits-json <lentils>/splits/adaclip.json
 
 Every threshold of the ``Metrics`` node is scored in one pass. The one with the highest
-F1 is written to ``threshold.json`` next to the artifact and into the ``Count`` node of
+F1 is written to ``pipeline.threshold.json`` next to the artifact and into the ``Count`` node of
 ``pipeline.yaml``, so the artifact counts with it at inference. ``evaluate.py`` reads the
 same file: the test split never takes part in the choice.
 """
@@ -26,7 +26,11 @@ import click
     help="pipeline.yaml written by train.py.",
 )
 @click.option("--device", default=None, help="cuda or cpu; default: cuda when available.")
-@click.option("--limit-batches", type=int, help="Score the first N batches only (smoke runs).")
+@click.option(
+    "--limit-batches",
+    type=click.IntRange(min=1),
+    help="Score the first N batches only (smoke runs).",
+)
 def main(
     universe_csv: Path,
     splits_json: Path,
@@ -39,7 +43,9 @@ def main(
     limit_batches: int | None,
 ) -> None:
     """Score the validation split and store the chosen threshold."""
-    pipeline = engine.load_pipeline(artifact, device=device or engine.default_device())
+    pipeline = engine.load_pipeline(
+        artifact, device=device or engine.default_device(), trained=True
+    )
     datamodule = engine.make_datamodule(
         universe_csv,
         splits_json,

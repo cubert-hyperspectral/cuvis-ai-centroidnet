@@ -39,7 +39,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "plugins.yaml"
 TRAIN_CONFIG = PIPELINE_DIR / "centroidnet_fod_lentils_train.yaml"
 LOSS_NODES = ("CentreLoss", "BorderLoss", "ClassLoss")
-THRESHOLD_FILE = "threshold.json"
+# The node names the example looks up; a pipeline passed with --pipeline has to keep them.
+REQUIRED_NODES = ("Backbone", *LOSS_NODES, "Metrics", "Count")
+ARTIFACT_NAME = "pipeline.yaml"
+THRESHOLD_ENDING = "threshold.json"
 
 
 def data_options(command: Callable[..., Any]) -> Callable[..., Any]:
@@ -111,9 +114,17 @@ def registry() -> NodeRegistry:
     return nodes
 
 
-def load_pipeline(config: Path, *, device: str | None = None) -> CuvisPipeline:
-    """Build a pipeline from a config, with the weights next to it when they exist."""
+def load_pipeline(
+    config: Path, *, device: str | None = None, trained: bool = False
+) -> CuvisPipeline:
+    """Build a pipeline from a config, with the weights next to it when they exist.
+
+    ``trained`` is for a saved artifact: its weights file has to be there. Without it the
+    pipeline would be built with a freshly initialised backbone and scored as if trained.
+    """
     weights = config.with_suffix(".pt")
+    if trained and not weights.exists():
+        raise click.UsageError(f"{weights} is missing: {config} has no trained weights next to it.")
     return CuvisPipeline.load_pipeline(
         str(config),
         weights_path=str(weights) if weights.exists() else None,
@@ -122,13 +133,29 @@ def load_pipeline(config: Path, *, device: str | None = None) -> CuvisPipeline:
     )
 
 
+def nodes_by_name(pipeline: CuvisPipeline) -> dict[str, Any]:
+    """Return the nodes of a pipeline by name, or stop when one the example needs is missing."""
+    nodes = {node.name: node for node in pipeline.nodes}
+    missing = [name for name in REQUIRED_NODES if name not in nodes]
+    if missing:
+        raise click.UsageError(
+            f"The pipeline has no node named {', '.join(missing)}. The example looks its "
+            f"nodes up by the names used in {TRAIN_CONFIG.name}."
+        )
+    return nodes
+
+
 def default_device() -> str:
     """Return ``cuda`` when a GPU is visible, else ``cpu``."""
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def git_commit() -> str | None:
-    """Return the commit of this checkout, or ``None`` outside a git checkout."""
+    """Return the commit of this checkout, or ``None`` when git gives no answer.
+
+    The commit is a note in the run files. A missing, failing or hanging git must not end
+    a run that has just finished its fit.
+    """
     try:
         done = subprocess.run(
             ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
@@ -137,9 +164,25 @@ def git_commit() -> str | None:
             timeout=10,
             check=False,
         )
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout.strip() or None
+
+
+def beside(artifact: Path, ending: str) -> Path:
+    """Return the path of a result file of an artifact: the artifact's name with another ending.
+
+    ``runs/a/pipeline.yaml`` and ``threshold.json`` give ``runs/a/pipeline.threshold.json``,
+    so two artifacts in one folder never share a result file.
+    """
+    return artifact.with_name(f"{artifact.stem}.{ending}")
+
+
+def write_whole(target: Path, text: str) -> None:
+    """Write a text file through a temporary file, so a crash never leaves half of it."""
+    temporary = target.with_name(target.name + ".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(target)
 
 
 class EpochLog(Callback):
@@ -181,11 +224,19 @@ def train(
 
     Validation during training runs on full frames in tiles, which is slow: it is off
     unless ``val_every`` is positive.
+
+    ``out_dir`` must not hold a trained pipeline yet. A second run into the same folder
+    would leave the threshold and the scores of the first model next to the new weights.
     """
+    if (out_dir / ARTIFACT_NAME).exists():
+        raise click.UsageError(
+            f"{out_dir} already holds a trained pipeline ({ARTIFACT_NAME}); "
+            "choose a new --out folder."
+        )
     if save_best_val and val_every <= 0:
         raise click.UsageError("--save-best-val needs --val-every N, so that validation runs.")
+    nodes = nodes_by_name(pipeline)
     out_dir.mkdir(parents=True, exist_ok=True)
-    nodes = {node.name: node for node in pipeline.nodes}
     pipeline.unfreeze_nodes_by_name(["Backbone"])
 
     post_fit = PostFitCallback(metric_nodes=[nodes["Metrics"]])
@@ -221,7 +272,7 @@ def train(
     trainer.fit()
     seconds = time.monotonic() - start
 
-    artifact = out_dir / "pipeline.yaml"
+    artifact = out_dir / ARTIFACT_NAME
     pipeline.save_to_file(
         str(artifact),
         save_weights=True,
@@ -238,7 +289,7 @@ def train(
         "lr": lr,
         **run_meta,
     }
-    (out_dir / "run.json").write_text(json.dumps(run, indent=2, default=str), encoding="utf-8")
+    write_whole(out_dir / "run.json", json.dumps(run, indent=2, default=str))
     click.echo(f"saved {artifact} and {artifact.with_suffix('.pt')}")
 
     results = {}
@@ -274,7 +325,7 @@ def score_split(
         "val": (datamodule.val_dataloader, ExecutionStage.VAL),
         "test": (datamodule.test_dataloader, ExecutionStage.TEST),
     }[split]
-    node = {n.name: n for n in pipeline.nodes}["Metrics"]
+    node = nodes_by_name(pipeline)["Metrics"]
     batches = itertools.islice(loader(), limit_batches)
     summary = evaluate_split(pipeline, batches, stage=stage, metric_nodes=[node])
     return _split_result(split, summary.frames, summary.metrics, node)
@@ -302,13 +353,13 @@ def set_min_votes(config: Path, min_votes: float) -> None:
     content = yaml.safe_load(config.read_text(encoding="utf-8"))
     count = next(node for node in content["nodes"] if node["name"] == "Count")
     count.setdefault("hparams", {})["min_votes"] = float(min_votes)
-    config.write_text(yaml.safe_dump(content, sort_keys=False), encoding="utf-8")
+    write_whole(config, yaml.safe_dump(content, sort_keys=False))
 
 
 def store_threshold(artifact: Path, result: dict[str, Any]) -> float:
     """Choose the vote threshold from the scores of a split and store it with the artifact.
 
-    The threshold with the highest F1 goes into ``threshold.json`` next to the artifact
+    The threshold with the highest F1 goes into ``<artifact>.threshold.json`` next to it
     and into the ``Count`` node of the pipeline config, so the artifact counts with it at
     inference. Returns the chosen threshold.
     """
@@ -324,15 +375,15 @@ def store_threshold(artifact: Path, result: dict[str, Any]) -> float:
         "git_commit": git_commit(),
         "scores": {f"{threshold:g}": row for threshold, row in result["scores"].items()},
     }
-    target = artifact.with_name(THRESHOLD_FILE)
-    target.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    target = beside(artifact, THRESHOLD_ENDING)
+    write_whole(target, json.dumps(record, indent=2))
     click.echo(f"chosen: {chosen:g} votes; written to {target} and to Count.min_votes")
     return chosen
 
 
 def stored_threshold(artifact: Path) -> float:
     """Return the vote threshold stored next to an artifact."""
-    source = artifact.with_name(THRESHOLD_FILE)
+    source = beside(artifact, THRESHOLD_ENDING)
     if not source.exists():
         raise click.UsageError(f"{source} is missing; run select_threshold.py first.")
     return float(json.loads(source.read_text(encoding="utf-8"))["min_votes"])
@@ -340,6 +391,12 @@ def stored_threshold(artifact: Path) -> float:
 
 def store_metrics(artifact: Path, result: dict[str, Any], min_votes: float) -> None:
     """Print the scores of a split at one threshold and write them next to the artifact."""
+    if min_votes not in result["scores"]:
+        scored = ", ".join(f"{threshold:g}" for threshold in result["scores"])
+        raise click.UsageError(
+            f"The Metrics node did not score a threshold of {min_votes:g} votes (it scored "
+            f"{scored}); run select_threshold.py again."
+        )
     print_scores(result, only=min_votes)
     record = {
         "split": result["split"],
@@ -349,6 +406,6 @@ def store_metrics(artifact: Path, result: dict[str, Any], min_votes: float) -> N
         "git_commit": git_commit(),
         **result["scores"][min_votes],
     }
-    target = artifact.with_name(f"{result['split']}_metrics.json")
-    target.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    target = beside(artifact, f"{result['split']}_metrics.json")
+    write_whole(target, json.dumps(record, indent=2))
     click.echo(f"written to {target}")
