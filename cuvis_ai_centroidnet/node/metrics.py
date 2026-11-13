@@ -30,6 +30,9 @@ PER_THRESHOLD_METRICS = (
 )
 # The names that are plain sums; the others are ratios of two sums.
 _COUNTS = frozenset({"true_positives", "false_positives", "false_negatives", "predicted_count"})
+# Peaks are matched in blocks of at most this many peak-centroid pairs. A block is never
+# smaller than one peak, so one peak against all centroids of a frame always fits.
+_MAX_PAIRWISE = 2**22
 
 
 def metric_name(name: str, threshold: float) -> str:
@@ -68,23 +71,33 @@ class _EpochRatio(TorchMetric):
         return torch.where(divisor > 0, total / divisor.clamp_min(1.0), torch.zeros_like(total))
 
 
-def _count_hits(distance: Tensor, match_radius: float) -> int:
+def _count_hits(peaks: Tensor, centroids: Tensor, match_radius: float) -> int:
     """Match peaks to centroids one to one and return the number of matched peaks.
 
-    ``distance`` is ``[P, N]`` with the peaks in the order in which they choose. Each peak
-    takes the nearest centroid that is still free and within ``match_radius``; among
-    centroids at the same distance the first one (the lower id).
+    ``peaks`` is ``[P, 2]`` in the order in which the peaks choose, ``centroids`` is
+    ``[N, 2]``, both as (y, x). Each peak takes the nearest centroid that is still free
+    and within ``match_radius``; among centroids at the same distance the first one (the
+    lower id).
+
+    The distances are formed for a few peaks at a time, so no ``[P, N]`` matrix is held at
+    once, and each block is matched on the CPU, where the loop over its peaks costs no
+    device round trips.
     """
-    reachable = distance <= match_radius
-    free = torch.ones(distance.shape[1], dtype=torch.bool, device=distance.device)
+    count = centroids.shape[0]
+    free = torch.ones(count, dtype=torch.bool)
     hits = 0
-    # Only peaks with a centroid in reach can match; the others never enter the loop.
-    for peak in reachable.any(dim=1).nonzero().squeeze(1).tolist():
-        candidates = torch.where(reachable[peak] & free, distance[peak], math.inf)
-        nearest = candidates.min()
-        if torch.isfinite(nearest):
-            free[(candidates == nearest).nonzero()[0]] = False
-            hits += 1
+    step = max(1, _MAX_PAIRWISE // count)
+    for start in range(0, peaks.shape[0], step):
+        block = peaks[start : start + step, None, :] - centroids[None, :, :]
+        distance = block.square().sum(dim=-1).sqrt().cpu()
+        reachable = distance <= match_radius
+        # Only peaks with a centroid in reach can match; the others never enter the loop.
+        for peak in reachable.any(dim=1).nonzero().squeeze(1).tolist():
+            candidates = torch.where(reachable[peak] & free, distance[peak], math.inf)
+            nearest = candidates.min()
+            if torch.isfinite(nearest):
+                free[(candidates == nearest).nonzero()[0]] = False
+                hits += 1
     return hits
 
 
@@ -124,6 +137,11 @@ class CentroidDetectionMetrics(Node):
     running value over the batches of the current epoch, and the last batch carries the
     epoch result, independent of the batch size. A ratio with a zero denominator is 0.
     The node runs in validation and test.
+
+    The counts start from zero when the stage or the epoch of the context changes. The
+    trainer and ``evaluate_split`` of the framework also reset the objects of
+    ``pooled_metrics()`` around every pass. Code that calls ``forward`` itself and runs
+    two passes with the same stage and epoch has to reset those objects in between.
 
     Parameters
     ----------
@@ -264,8 +282,7 @@ class CentroidDetectionMetrics(Node):
         position = position[torch.argsort(flat[position], descending=True, stable=True)]
         width = votes.shape[1]
         peak = torch.stack([position // width, position % width], dim=1).to(torch.float64)
-        distance = (peak[:, None, :] - centroids[None, :, :]).square().sum(dim=-1).sqrt()
-        return _count_hits(distance, self.match_radius), predicted
+        return _count_hits(peak, centroids, self.match_radius), predicted
 
     def pooled_metrics(self) -> dict[str, TorchMetric]:
         """Return the live metric object of every reported name.

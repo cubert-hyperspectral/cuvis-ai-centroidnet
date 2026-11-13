@@ -258,6 +258,35 @@ def test_matches_the_written_out_rule_on_random_frames() -> None:
     assert values["false_negatives_at_30"] == totals[2]
 
 
+def test_a_small_pairwise_budget_gives_the_same_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Peaks are matched a few at a time; the chunk size must not change the result."""
+    from cuvis_ai_centroidnet.node import metrics as metrics_module
+
+    generator = torch.Generator().manual_seed(11)
+    centres = torch.randint(3, 37, (9, 2), generator=generator).tolist()
+    instances = disc_instances(40, 40, [(y, x, 2) for y, x in centres]).unsqueeze(0)
+    peaks = torch.zeros(40, 40)
+    spots = torch.randint(0, 40, (60, 2), generator=generator)
+    peaks[spots[:, 0], spots[:, 1]] = torch.randint(28, 34, (60,), generator=generator).float()
+    context = Context(stage=ExecutionStage.VAL)
+
+    whole = _values(
+        _node(match_radius=4.0).forward(
+            peaks=peaks[None, ..., None], instances=instances, context=context
+        )
+    )
+    # Fewer elements than one peak row needs: every peak becomes a chunk of its own.
+    monkeypatch.setattr(metrics_module, "_MAX_PAIRWISE", 4)
+    chunked = _values(
+        _node(match_radius=4.0).forward(
+            peaks=peaks[None, ..., None], instances=instances, context=context
+        )
+    )
+
+    assert whole["true_positives_at_30"] > 1 and whole["false_positives_at_30"] > 1
+    assert chunked == whole
+
+
 def _four_frames() -> tuple[torch.Tensor, torch.Tensor]:
     """Frames with 1 of 1, 0 of 3, 2 of 2 and 0 of 0 objects found; one false alarm in the last."""
     layouts = [
