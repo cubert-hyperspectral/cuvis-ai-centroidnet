@@ -12,6 +12,7 @@ from cuvis_ai_schemas.enums import ExecutionStage, NodeCategory, NodeTag
 from cuvis_ai_schemas.pipeline import PortSpec
 from torch import Tensor
 
+from cuvis_ai_centroidnet._geometry import instance_layout
 from cuvis_ai_centroidnet._validation import positive_distance
 
 _DEFAULT_MAX_PAIRWISE = 2**22
@@ -176,23 +177,11 @@ class InstanceVectorFieldEncoder(Node):
         weights = torch.ones(height, width, 1, dtype=torch.float32, device=device)
 
         labels = frame.to(torch.int64)
-        flat = labels.reshape(-1)
-        object_pixels = (flat > 0).nonzero().squeeze(1)
-        if object_pixels.numel() == 0:
+        layout = instance_layout(labels)
+        count = layout.ids.numel()
+        if count == 0:
             return centre, border, weights
-
-        # Instances in ascending id order; ``index`` is the position of each object pixel's
-        # instance in that order.
-        ids = torch.unique(flat[object_pixels])
-        index = torch.searchsorted(ids, flat[object_pixels])
-        count = ids.numel()
-
-        # Centroids. Sums in float64 stay exact for any frame size.
-        sizes = torch.bincount(index, minlength=count).to(torch.float64)
-        totals = torch.zeros(2, count, dtype=torch.float64, device=device)
-        totals[0].index_add_(0, index, (object_pixels // width).to(torch.float64))
-        totals[1].index_add_(0, index, (object_pixels % width).to(torch.float64))
-        centre_y, centre_x = (totals / sizes).to(torch.float32)
+        centre_y, centre_x = layout.centroids.unbind(dim=1)
 
         nearest_instance = _nearest_centroid(
             centre_y, centre_x, height, width, self.max_pairwise
@@ -207,14 +196,14 @@ class InstanceVectorFieldEncoder(Node):
             | (padded[1:-1, :-2] != labels)
             | (padded[1:-1, 2:] != labels)
         )
-        on_border = differs.reshape(-1)[object_pixels]
-        border_index = index[on_border]
+        on_border = differs.reshape(-1)[layout.pixels]
+        border_owner = layout.owner[on_border]
         # Grouped by instance; the stable sort keeps the row-major order inside a group.
-        border_pixels = object_pixels[on_border][torch.argsort(border_index, stable=True)]
-        group_ends = torch.cumsum(torch.bincount(border_index, minlength=count), dim=0).tolist()
+        border_pixels = layout.pixels[on_border][torch.argsort(border_owner, stable=True)]
+        group_ends = torch.cumsum(torch.bincount(border_owner, minlength=count), dim=0).tolist()
 
         frame_edge = torch.cat([labels[0], labels[-1], labels[:, 0], labels[:, -1]])
-        touches_edge = torch.isin(ids, frame_edge).tolist()
+        touches_edge = torch.isin(layout.ids, frame_edge).tolist()
 
         reach = math.ceil(self.max_distance)
         group_start = 0

@@ -124,3 +124,25 @@ capabilities:
       optional: false
       description: 'Loss weight per pixel [B, H, W, 1]: 0 around objects cut by the edge'
   doc_summary: Turn an instance map into centre vectors, border vectors and loss weights.
+- class_name: cuvis_ai_centroidnet.node.metrics.CentroidDetectionMetrics
+  category: metric
+  tags: [detection, evaluation]
+  icon_svg: "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\" stroke=\"#C9615A\" stroke-width=\"2.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n  <path d=\"M10 14v40h44\"/>\n  <rect x=\"16\" y=\"38\" width=\"8\" height=\"12\"/>\n  <rect x=\"28\" y=\"28\" width=\"8\" height=\"22\"/>\n  <rect x=\"40\" y=\"18\" width=\"8\" height=\"32\"/>\n</svg>\n"
+  input_specs:
+    peaks:
+      dtype: float32
+      shape: [-1, -1, -1, 1]
+      optional: false
+      description: 'Suppressed vote map [B, H, W, 1]: votes at local maxima, 0 elsewhere'
+    instances:
+      dtype: int32
+      shape: [-1, -1, -1]
+      optional: false
+      description: 'Instance map [B, H, W]: one positive id per object, 0 = background'
+  output_specs:
+    metrics:
+      dtype: ''
+      shape: []
+      optional: false
+      description: List of Metric objects
+  doc_summary: Precision, recall, F1 and count error of vote peaks against labelled instances.

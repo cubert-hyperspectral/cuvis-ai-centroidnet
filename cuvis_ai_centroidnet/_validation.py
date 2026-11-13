@@ -5,6 +5,16 @@ from __future__ import annotations
 import math
 
 
+def positive_pixels(value: float, owner: str, name: str) -> float:
+    """Return a length in pixels as a float, or raise when it is not positive and finite."""
+    number = float(value)
+    if not math.isfinite(number) or number <= 0.0:
+        raise ValueError(
+            f"{owner}: {name} must be a positive, finite number of pixels; got {value!r}."
+        )
+    return number
+
+
 def positive_distance(max_distance: float, owner: str) -> float:
     """Return ``max_distance`` as a float, or raise when it is not positive and finite.
 
@@ -12,13 +22,7 @@ def positive_distance(max_distance: float, owner: str) -> float:
     ``InstanceVectorFieldEncoder`` and normalises ``VectorFieldLoss``. Zero would switch the
     predictions off and divide the loss by zero, so there is no "no clipping" value.
     """
-    value = float(max_distance)
-    if not math.isfinite(value) or value <= 0.0:
-        raise ValueError(
-            f"{owner}: max_distance must be a positive, finite number of pixels; "
-            f"got {max_distance!r}."
-        )
-    return value
+    return positive_pixels(max_distance, owner, "max_distance")
 
 
 # A pixel whose vector is zero votes for itself, so every background pixel of a vote map

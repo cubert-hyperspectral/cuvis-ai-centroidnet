@@ -48,6 +48,8 @@ dependencies = [
   # ships the same package; it is named here because this package imports it.
   "opencv-python-headless>=4.8",
   "numpy>=1.26",
+  # Imported directly by CentroidDetectionMetrics; the same floor as cuvis-ai.
+  "torchmetrics>=1.9.0",
 ]
 
 [project.optional-dependencies]

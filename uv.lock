@@ -759,6 +759,7 @@ dependencies = [
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "opencv-python-headless" },
     { name = "torch" },
+    { name = "torchmetrics" },
     { name = "torchvision" },
 ]
 
@@ -808,6 +809,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "torch", specifier = ">=2.1" },
+    { name = "torchmetrics", specifier = ">=1.9.0" },
     { name = "torchvision" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=6.2.0" },
 ]
