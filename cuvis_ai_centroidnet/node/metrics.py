@@ -17,8 +17,8 @@ from torchmetrics import Metric as TorchMetric
 from cuvis_ai_centroidnet._geometry import instance_layout
 from cuvis_ai_centroidnet._validation import positive_pixels, vote_threshold
 
-# Reported once per vote threshold, as ``<name>_at_<threshold>``.
-_PER_THRESHOLD = (
+# Reported once per vote threshold, under the name ``metric_name`` gives.
+PER_THRESHOLD_METRICS = (
     "true_positives",
     "false_positives",
     "false_negatives",
@@ -30,6 +30,11 @@ _PER_THRESHOLD = (
 )
 # The names that are plain sums; the others are ratios of two sums.
 _COUNTS = frozenset({"true_positives", "false_positives", "false_negatives", "predicted_count"})
+
+
+def metric_name(name: str, threshold: float) -> str:
+    """Return the reported name of a per-threshold metric, for example ``f1_at_30``."""
+    return f"{name}_at_{threshold:g}"
 
 
 class _EpochRatio(TorchMetric):
@@ -170,8 +175,9 @@ class CentroidDetectionMetrics(Node):
     def __init__(self, thresholds: Sequence[float], match_radius: float, **kwargs: Any) -> None:
         owner = type(self).__name__
         self.thresholds = [vote_threshold(value, owner, "thresholds") for value in thresholds]
-        labels = [f"{value:g}" for value in self.thresholds]
-        if not labels or len(set(labels)) != len(labels):
+        # Two thresholds that print alike would report under the same names.
+        labels = {metric_name("", value) for value in self.thresholds}
+        if not labels or len(labels) != len(self.thresholds):
             raise ValueError(
                 f"{owner}: thresholds must hold at least one vote threshold and no value "
                 f"twice; got {list(thresholds)!r}."
@@ -179,11 +185,11 @@ class CentroidDetectionMetrics(Node):
         self.match_radius = positive_pixels(match_radius, owner, "match_radius")
         super().__init__(thresholds=self.thresholds, match_radius=self.match_radius, **kwargs)
 
-        self._labels = labels
         objects = {"true_count": _EpochRatio(is_ratio=False)}
-        for label in labels:
-            for name in _PER_THRESHOLD:
-                objects[f"{name}_at_{label}"] = _EpochRatio(is_ratio=name not in _COUNTS)
+        for threshold in self.thresholds:
+            for name in PER_THRESHOLD_METRICS:
+                is_ratio = name not in _COUNTS
+                objects[metric_name(name, threshold)] = _EpochRatio(is_ratio=is_ratio)
         # The list registers the objects as submodules, so they move with the pipeline;
         # a threshold such as 2.5 cannot be part of a submodule name, hence the plain dict.
         self._registered = nn.ModuleList(objects.values())
@@ -217,17 +223,21 @@ class CentroidDetectionMetrics(Node):
                 total[2] += abs(predicted - true)
 
         objects["true_count"].update(true_count)
-        for (hits, predicted, error), label in zip(totals, self._labels, strict=True):
+        for (hits, predicted, error), threshold in zip(totals, self.thresholds, strict=True):
             false_positives = predicted - hits
             false_negatives = true_count - hits
-            objects[f"true_positives_at_{label}"].update(hits)
-            objects[f"false_positives_at_{label}"].update(false_positives)
-            objects[f"false_negatives_at_{label}"].update(false_negatives)
-            objects[f"precision_at_{label}"].update(hits, predicted)
-            objects[f"recall_at_{label}"].update(hits, true_count)
-            objects[f"f1_at_{label}"].update(2 * hits, 2 * hits + false_positives + false_negatives)
-            objects[f"predicted_count_at_{label}"].update(predicted)
-            objects[f"count_error_at_{label}"].update(error, frames)
+            updates: dict[str, tuple[int, ...]] = {
+                "true_positives": (hits,),
+                "false_positives": (false_positives,),
+                "false_negatives": (false_negatives,),
+                "precision": (hits, predicted),
+                "recall": (hits, true_count),
+                "f1": (2 * hits, 2 * hits + false_positives + false_negatives),
+                "predicted_count": (predicted,),
+                "count_error": (error, frames),
+            }
+            for name, counts in updates.items():
+                objects[metric_name(name, threshold)].update(*counts)
 
         metrics = [
             Metric(

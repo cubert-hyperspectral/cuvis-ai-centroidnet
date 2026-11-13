@@ -87,9 +87,9 @@ jobs:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v3
       - name: Check formatting
-        run: uv run --locked --extra dev ruff format --check cuvis_ai_centroidnet tests
+        run: uv run --locked --extra dev ruff format --check cuvis_ai_centroidnet tests examples
       - name: Run ruff
-        run: uv run --locked --extra dev ruff check cuvis_ai_centroidnet tests
+        run: uv run --locked --extra dev ruff check cuvis_ai_centroidnet tests examples
 
   typecheck:
     name: Type checking

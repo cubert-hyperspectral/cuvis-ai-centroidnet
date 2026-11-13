@@ -216,8 +216,9 @@ def test_training_pipeline_crops_in_training_and_keeps_full_frames_in_validation
     with torch.no_grad():
         val = pipeline.forward(batch=batch, stage=ExecutionStage.VAL)
 
-    assert train[("Heads", "centroid_vectors")].shape == (2, 192, 192, 2)
-    assert train[("Encoder", "centroid_vectors")].shape == (2, 192, 192, 2)
+    # Two frames, four crops each.
+    assert train[("Heads", "centroid_vectors")].shape == (8, 192, 192, 2)
+    assert train[("Encoder", "centroid_vectors")].shape == (8, 192, 192, 2)
     assert ("Metrics", "metrics") not in train
     total = sum(train[(name, "loss")] for name in ("CentreLoss", "BorderLoss", "ClassLoss"))
     assert torch.isfinite(total) and total.requires_grad

@@ -35,7 +35,8 @@ nodes:
     connectivity: 8
 
 # Crops cube and instance map together at TRAIN, identity otherwise. The mask port carries
-# the instance map, so the targets are encoded on the crop.
+# the instance map, so the targets are encoded on the crop. Four crops per frame: a frame
+# is 1000 x 1080 x 61 and is read once per step.
 - name: Augment
   class_name: cuvis_ai_augment.node.compose.AugmentationCompose
   hparams:
@@ -45,6 +46,7 @@ nodes:
       size: [192, 192]
       fg_percent: 0.7
       probabilistic: true
+      samples_per_input: 4
     - type: RandomHorizontalFlip
       prob: 0.5
     - type: RandomVerticalFlip
