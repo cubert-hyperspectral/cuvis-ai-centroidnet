@@ -50,7 +50,7 @@ import click
     "--seed",
     default=42,
     show_default=True,
-    type=click.IntRange(min=0),
+    type=click.IntRange(min=0, max=engine.MAX_SEED),
     help="Seed of the initial weights and of the fit; set before the pipeline is built.",
 )
 @click.option(

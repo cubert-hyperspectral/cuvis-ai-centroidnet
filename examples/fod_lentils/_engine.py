@@ -48,6 +48,8 @@ RUN_RECORD = "run.json"
 THRESHOLD_ENDING = "threshold.json"
 # The value --save-best-val keeps the best epoch by.
 BEST_F1 = "val_best_f1"
+# The largest seed ``seed_everything`` takes: it hands the seed to NumPy, which takes 32 bits.
+MAX_SEED = 2**32 - 1
 
 
 def data_options(command: Callable[..., Any]) -> Callable[..., Any]:

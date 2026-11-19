@@ -210,6 +210,35 @@ def test_train_seeds_before_it_builds_the_pipeline(
     assert order == [("seed", seed), ("load", None)]
 
 
+def test_the_largest_seed_is_one_the_seeding_call_takes(engine: ModuleType) -> None:
+    engine.seed_run(engine.MAX_SEED)
+
+
+def test_a_seed_above_the_largest_is_a_usage_error(
+    example: Callable[[str], ModuleType],
+    engine: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The seeding call takes 32 bits; a larger seed stops at the option, not in a traceback."""
+    files = [tmp_path / name for name in ("universe.csv", "splits.json")]
+    for path in files:
+        path.write_text("", encoding="utf-8")
+    arguments = ["--universe-csv", files[0], "--splits-json", files[1], "--out", tmp_path / "run"]
+    called: list[str] = []
+    monkeypatch.setattr(engine, "seed_run", lambda _: called.append("seed"))
+    monkeypatch.setattr(engine, "load_pipeline", lambda *_, **__: called.append("load"))
+
+    result = CliRunner().invoke(
+        example("train").main,
+        [str(item) for item in arguments] + ["--seed", str(engine.MAX_SEED + 1)],
+    )
+
+    assert result.exit_code == 2
+    assert "--seed" in result.output
+    assert called == []
+
+
 def test_a_stored_threshold_that_the_count_node_does_not_use_is_refused(
     engine: ModuleType, tmp_path: Path
 ) -> None:
