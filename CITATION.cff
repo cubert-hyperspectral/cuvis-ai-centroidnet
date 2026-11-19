@@ -1,0 +1,62 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite the two papers it implements,
+  listed under references.
+title: cuvis-ai-centroidnet
+type: software
+authors:
+  - name: Cubert GmbH
+    email: cuvis.ai@cubert-gmbh.de
+repository-code: "https://github.com/cubert-hyperspectral/cuvis-ai-centroidnet"
+url: "https://docs.cuvis.ai/latest/"
+license: Apache-2.0
+abstract: >-
+  CentroidNetV2 nodes for cuvis-ai: counting and separating small, touching
+  objects on hyperspectral cubes by centre and border voting.
+keywords:
+  - hyperspectral imaging
+  - object counting
+  - instance segmentation
+  - cuvis-ai
+references:
+  - type: article
+    title: "CentroidNetV2: A hybrid deep neural network for small-object segmentation and counting"
+    authors:
+      - family-names: Dijkstra
+        given-names: Klaas
+      - family-names: Loosdrecht
+        name-particle: van de
+        given-names: Jaap
+      - family-names: Atsma
+        given-names: Waatze A.
+      - family-names: Schomaker
+        given-names: Lambert R. B.
+      - family-names: Wiering
+        given-names: Marco A.
+    journal: Neurocomputing
+    volume: 423
+    start: 490
+    end: 505
+    year: 2021
+    doi: 10.1016/j.neucom.2020.10.075
+  - type: conference-paper
+    title: "CentroidNet: A deep neural network for joint object localization and counting"
+    authors:
+      - family-names: Dijkstra
+        given-names: Klaas
+      - family-names: Loosdrecht
+        name-particle: van de
+        given-names: Jaap
+      - family-names: Schomaker
+        given-names: Lambert R. B.
+      - family-names: Wiering
+        given-names: Marco A.
+    collection-title: "Machine Learning and Knowledge Discovery in Databases, ECML PKDD 2018"
+    collection-type: proceedings
+    publisher:
+      name: Springer
+    volume: 11053
+    start: 585
+    end: 601
+    year: 2019
+    doi: 10.1007/978-3-030-10997-4_36

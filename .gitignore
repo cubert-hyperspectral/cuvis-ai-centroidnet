@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Envs
+.venv/
+venv/
+.env
+
+# setuptools-scm
+_version.py
+
+# Training / experiment artifacts
+outputs/
+lightning_logs/
+*.pt
+*.ckpt
+*.log
+
+# Run outputs of the examples
+runs/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local tooling
+.gitnexus/
+.gstack/
+.claude/
+.context/
+CLAUDE*.md
+AGENTS.md
+.cuvis-ai-env.json
