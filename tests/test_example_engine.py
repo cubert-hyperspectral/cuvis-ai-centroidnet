@@ -93,6 +93,7 @@ def test_training_into_a_folder_with_a_trained_pipeline_stops_before_the_fit(
             out_dir=tmp_path,
             epochs=1,
             lr=1e-3,
+            seed=42,
             accelerator="cpu",
             val_every=0,
             save_best_val=False,
@@ -100,6 +101,136 @@ def test_training_into_a_folder_with_a_trained_pipeline_stops_before_the_fit(
             limit_val_batches=None,
             run_meta={},
         )
+
+
+def test_reserving_a_folder_writes_the_run_record_at_once(
+    engine: ModuleType, tmp_path: Path
+) -> None:
+    """The record marks the folder as taken before anything is trained."""
+    out = tmp_path / "new" / "run"
+
+    engine.reserve_run_folder(out, {"epochs": 3, "seed": 7})
+
+    assert json.loads((out / "run.json").read_text(encoding="utf-8")) == {"epochs": 3, "seed": 7}
+    with pytest.raises(click.UsageError, match="already holds a run"):
+        engine.reserve_run_folder(out, {"epochs": 3, "seed": 7})
+
+
+def test_a_folder_that_another_run_has_claimed_is_refused(
+    engine: ModuleType, tmp_path: Path
+) -> None:
+    """A run that is still training has saved no pipeline yet; its record stops a second one."""
+    (tmp_path / "run.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(click.UsageError, match="already holds a run"):
+        engine.reserve_run_folder(tmp_path, {"epochs": 1})
+    assert (tmp_path / "run.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_training_claims_its_folder_before_the_fit(
+    engine: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Two runs started into one folder must not both reach the fit and overwrite each other."""
+    pipeline = SimpleNamespace(
+        name="p",
+        nodes=[SimpleNamespace(name=name) for name in engine.REQUIRED_NODES],
+        unfreeze_nodes_by_name=lambda names: None,
+    )
+    seen: dict = {}
+
+    class StopAtFit:
+        def __init__(self, **options: object) -> None:
+            seen["seed"] = options["training_config"].seed
+
+        def fit(self) -> None:
+            seen["record"] = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+            raise RuntimeError("fit started")
+
+    monkeypatch.setattr(engine, "GradientTrainer", StopAtFit)
+    monkeypatch.setattr(engine, "PostFitCallback", lambda **_: SimpleNamespace(result=None))
+    arguments = {
+        "out_dir": tmp_path,
+        "epochs": 2,
+        "lr": 1e-3,
+        "seed": 7,
+        "accelerator": "cpu",
+        "val_every": 0,
+        "save_best_val": False,
+        "limit_train_batches": None,
+        "limit_val_batches": None,
+        "run_meta": {"batch": 4},
+    }
+
+    with pytest.raises(RuntimeError, match="fit started"):
+        engine.train(pipeline, None, **arguments)
+
+    assert seen["seed"] == 7
+    record = seen["record"]
+    assert (record["seed"], record["epochs"], record["batch"]) == (7, 2, 4)
+    assert record["fit_and_scoring_seconds"] is None
+    with pytest.raises(click.UsageError, match="already holds a run"):
+        engine.train(pipeline, None, **arguments)
+
+
+def test_the_same_seed_gives_the_same_initial_weights(engine: ModuleType) -> None:
+    def weights(seed: int) -> torch.Tensor:
+        engine.seed_run(seed)
+        return torch.nn.Linear(4, 3).weight.detach().clone()
+
+    assert torch.equal(weights(7), weights(7))
+    assert not torch.equal(weights(7), weights(8))
+
+
+@pytest.mark.parametrize(("flags", "seed"), [([], 42), (["--seed", "7"], 7)])
+def test_train_seeds_before_it_builds_the_pipeline(
+    example: Callable[[str], ModuleType],
+    engine: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    flags: list[str],
+    seed: int,
+) -> None:
+    """The backbone gets its weights when the config is loaded, so the seed has to come first."""
+    files = [tmp_path / name for name in ("universe.csv", "splits.json")]
+    for path in files:
+        path.write_text("", encoding="utf-8")
+    arguments = ["--universe-csv", files[0], "--splits-json", files[1], "--out", tmp_path / "run"]
+    order: list[tuple[str, int | None]] = []
+
+    def stop(*_: object, **__: object) -> None:
+        raise click.UsageError("stopped before the recordings are opened")
+
+    monkeypatch.setattr(engine, "seed_run", lambda value: order.append(("seed", value)))
+    monkeypatch.setattr(engine, "load_pipeline", lambda *_, **__: order.append(("load", None)))
+    monkeypatch.setattr(engine, "make_datamodule", stop)
+
+    result = CliRunner().invoke(example("train").main, [str(item) for item in arguments] + flags)
+
+    assert "stopped before the recordings are opened" in result.output
+    assert order == [("seed", seed), ("load", None)]
+
+
+def test_a_stored_threshold_that_the_count_node_does_not_use_is_refused(
+    engine: ModuleType, tmp_path: Path
+) -> None:
+    """The threshold lives in two files; evaluation must not score at one and count at the other."""
+    artifact = _artifact(tmp_path)
+    engine.store_threshold(artifact, _result("val", {10.0: _row(0.4, 0.5), 20.0: _row(0.8, 0.1)}))
+    # As if a later selection had stopped between its two writes.
+    engine.set_min_votes(artifact, 50.0)
+
+    with pytest.raises(click.UsageError, match="select_threshold"):
+        engine.stored_threshold(artifact)
+
+
+def test_a_config_without_a_count_node_cannot_take_a_threshold(
+    engine: ModuleType, tmp_path: Path
+) -> None:
+    artifact = tmp_path / "pipeline.yaml"
+    artifact.write_text(yaml.safe_dump({"nodes": [{"name": "Backbone"}]}), encoding="utf-8")
+
+    with pytest.raises(click.UsageError, match="Count"):
+        engine.set_min_votes(artifact, 20.0)
 
 
 def test_a_pipeline_without_the_node_names_of_the_example_is_refused(engine: ModuleType) -> None:

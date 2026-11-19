@@ -94,7 +94,7 @@ uv run --no-sync python train.py --universe-csv <lentils>/universe.csv --splits-
 
 The frames come straight from the cu3s recordings; there is no converted copy of the data. Reading a frame takes longer than a training step, so the scripts read on threads: `--read-threads 4` reads the frames of a batch at once, and `--read-ahead 4` reads the next ones while the model works. Only `--max-open-sessions` recordings stay open and opening one takes seconds, so an epoch goes through the recordings one after the other, in a new order each epoch (`--coherent-batches`). A batch then stays inside one recording, or two where one ends. Timed for 45 seconds per setting on an RTX 5070 Ti laptop GPU, with batches of 4 and no model behind the loader, the training loader read about 10 frames per second this way, 5 with one thread, and 1 with one thread and batches mixed from all recordings (`--mixed-batches`).
 
-`--out` has to be a new folder for every run: the script refuses a folder that already holds a trained pipeline, so the threshold and scores of one model never end up next to the weights of another.
+`--out` has to be a new folder for every run. The script writes `run.json` there before the fit and refuses a folder that already holds one, also while that run is still training. Two runs therefore never write into the same folder, and the threshold and scores of one model never end up next to the weights of another. `--seed` (default 42) is set before the pipeline is built, so it fixes the initial weights as well as the fit.
 
 After the fit the framework scores the validation and the test split. The script takes the vote threshold with the highest F1 on validation, stores it with the pipeline (`pipeline.threshold.json` and the `Count` node of `pipeline.yaml`) and writes the test scores at that threshold to `pipeline.test_metrics.json`. `select_threshold.py` and `evaluate.py` repeat these two steps for a saved pipeline.
 
@@ -121,7 +121,7 @@ What the runs say:
 
 Limits of these numbers:
 
-- The initial weights are not seeded: the trainer sets its seed when the fit starts, after the pipeline is built. Mixed batches ran twice, recording order with the F1 rule once.
+- The initial weights of these runs were not seeded: at their commit the trainer set its seed when the fit started, after the pipeline was built. The `--seed` option came afterwards. Mixed batches ran twice, recording order with the F1 rule once.
 - Two runs ended early, after 50 and after 24 of 60 epochs, and were scored from the checkpoint kept at that point.
 - The mixed runs ran on a different machine than the run in recording order.
 - The split holds out object arrangements, not recording sessions: every test recording also has frames in training.

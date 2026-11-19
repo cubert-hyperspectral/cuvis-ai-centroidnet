@@ -47,6 +47,13 @@ import click
 @click.option("--epochs", default=20, show_default=True)
 @click.option("--lr", default=1e-3, show_default=True, help="Adam learning rate.")
 @click.option(
+    "--seed",
+    default=42,
+    show_default=True,
+    type=click.IntRange(min=0),
+    help="Seed of the initial weights and of the fit; set before the pipeline is built.",
+)
+@click.option(
     "--val-every",
     default=0,
     show_default=True,
@@ -82,6 +89,7 @@ def main(
     config: Path,
     epochs: int,
     lr: float,
+    seed: int,
     val_every: int,
     save_best_val: bool,
     accelerator: str,
@@ -89,6 +97,7 @@ def main(
     limit_val_batches: int | None,
 ) -> None:
     """Build the pipeline, train it, save it and report its scores."""
+    engine.seed_run(seed)
     pipeline = engine.load_pipeline(config)
     datamodule = engine.make_datamodule(
         universe_csv,
@@ -107,6 +116,7 @@ def main(
         out_dir=out,
         epochs=epochs,
         lr=lr,
+        seed=seed,
         accelerator=accelerator,
         val_every=val_every,
         save_best_val=save_best_val,

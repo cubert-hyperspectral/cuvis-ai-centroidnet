@@ -30,6 +30,7 @@ from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.training.config import TrainingConfig
 from cuvis_ai_schemas.training.optimizer import OptimizerConfig
+from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 
 from cuvis_ai_centroidnet.configs import PIPELINE_DIR
@@ -43,6 +44,7 @@ LOSS_NODES = ("CentreLoss", "BorderLoss", "ClassLoss")
 # The node names the example looks up; a pipeline passed with --pipeline has to keep them.
 REQUIRED_NODES = ("Backbone", *LOSS_NODES, "Metrics", "Count")
 ARTIFACT_NAME = "pipeline.yaml"
+RUN_RECORD = "run.json"
 THRESHOLD_ENDING = "threshold.json"
 # The value --save-best-val keeps the best epoch by.
 BEST_F1 = "val_best_f1"
@@ -231,6 +233,33 @@ def write_whole(target: Path, text: str) -> None:
     temporary.replace(target)
 
 
+def seed_run(seed: int) -> None:
+    """Seed Python, NumPy and torch; call it before the pipeline is built.
+
+    The trainer seeds again when the fit starts. That is too late for the initial weights:
+    the backbone gets them when the config is loaded.
+    """
+    seed_everything(seed, workers=True)
+
+
+def reserve_run_folder(out_dir: Path, record: dict[str, Any]) -> None:
+    """Claim ``out_dir`` for one run by writing its ``run.json``, or stop when it is taken.
+
+    The record is created before the fit and only if it does not exist yet. A second run
+    into the same folder therefore stops here, also while the first one is still training
+    and has saved no pipeline. A run that stopped early keeps its folder: choose a new one.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with (out_dir / RUN_RECORD).open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, indent=2, default=str))
+    except FileExistsError:
+        raise click.UsageError(
+            f"{out_dir} already holds a run ({RUN_RECORD}): one that is training, one that "
+            "stopped early or a finished one; choose a new --out folder."
+        ) from None
+
+
 class EpochLog(Callback):
     """Print one line per training epoch: duration and the logged values."""
 
@@ -274,6 +303,7 @@ def train(
     out_dir: Path,
     epochs: int,
     lr: float,
+    seed: int,
     accelerator: str,
     val_every: int,
     save_best_val: bool,
@@ -292,8 +322,13 @@ def train(
     Validation during training runs on full frames in tiles, which is slow: it is off
     unless ``val_every`` is positive.
 
-    ``out_dir`` must not hold a trained pipeline yet. A second run into the same folder
-    would leave the threshold and the scores of the first model next to the new weights.
+    ``out_dir`` must not hold a run yet, finished or not. A second run into the same folder
+    would leave the threshold and the scores of the first model next to the new weights,
+    and two runs at the same time would overwrite each other. The folder is claimed with
+    ``run.json`` before the fit; the fit time is added to that file at the end.
+
+    ``seed`` goes to the trainer, which seeds the fit. The initial weights depend on the
+    seed that was set before ``pipeline`` was built (``seed_run``).
     """
     if (out_dir / ARTIFACT_NAME).exists():
         raise click.UsageError(
@@ -302,9 +337,18 @@ def train(
         )
     if save_best_val and val_every <= 0:
         raise click.UsageError("--save-best-val needs --val-every N, so that validation runs.")
-    git_commit()
     nodes = nodes_by_name(pipeline)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    artifact = out_dir / ARTIFACT_NAME
+    run = {
+        "artifact": str(artifact),
+        "git_commit": git_commit(),
+        "fit_and_scoring_seconds": None,
+        "epochs": epochs,
+        "lr": lr,
+        "seed": seed,
+        **run_meta,
+    }
+    reserve_run_folder(out_dir, run)
     pipeline.unfreeze_nodes_by_name(["Backbone"])
 
     post_fit = PostFitCallback(metric_nodes=[nodes["Metrics"]])
@@ -322,6 +366,7 @@ def train(
         loss_nodes=[nodes[name] for name in LOSS_NODES],
         metric_nodes=[nodes["Metrics"]] if val_every > 0 else None,
         training_config=TrainingConfig(
+            seed=seed,
             max_epochs=epochs,
             accelerator=accelerator,
             devices=1,
@@ -341,7 +386,6 @@ def train(
     trainer.fit()
     seconds = time.monotonic() - start
 
-    artifact = out_dir / ARTIFACT_NAME
     pipeline.save_to_file(
         str(artifact),
         save_weights=True,
@@ -350,15 +394,8 @@ def train(
             description="CentroidNetV2 vector fields trained on Industrial FOD lentils",
         ),
     )
-    run = {
-        "artifact": str(artifact),
-        "git_commit": git_commit(),
-        "fit_and_scoring_seconds": round(seconds, 1),
-        "epochs": epochs,
-        "lr": lr,
-        **run_meta,
-    }
-    write_whole(out_dir / "run.json", json.dumps(run, indent=2, default=str))
+    run["fit_and_scoring_seconds"] = round(seconds, 1)
+    write_whole(out_dir / RUN_RECORD, json.dumps(run, indent=2, default=str))
     click.echo(f"saved {artifact} and {artifact.with_suffix('.pt')}")
 
     results = {}
@@ -418,10 +455,19 @@ def print_scores(result: dict[str, Any], only: float | None = None) -> None:
         )
 
 
+def _count_node(content: Any, config: Path) -> dict[str, Any]:
+    """Return the ``Count`` node of a parsed pipeline config, or stop when it has none."""
+    nodes = content.get("nodes") if isinstance(content, dict) else None
+    for node in nodes or []:
+        if node.get("name") == "Count":
+            return node
+    raise click.UsageError(f"{config} has no node named Count.")
+
+
 def set_min_votes(config: Path, min_votes: float) -> None:
     """Write the chosen vote threshold into the ``Count`` node of a saved pipeline config."""
     content = yaml.safe_load(config.read_text(encoding="utf-8"))
-    count = next(node for node in content["nodes"] if node["name"] == "Count")
+    count = _count_node(content, config)
     count.setdefault("hparams", {})["min_votes"] = float(min_votes)
     write_whole(config, yaml.safe_dump(content, sort_keys=False))
 
@@ -452,11 +498,25 @@ def store_threshold(artifact: Path, result: dict[str, Any]) -> float:
 
 
 def stored_threshold(artifact: Path) -> float:
-    """Return the vote threshold stored next to an artifact."""
+    """Return the vote threshold stored next to an artifact.
+
+    The threshold lives in two places, the threshold file and the ``Count`` node of the
+    artifact, and they are written one after the other. Where they disagree, a selection
+    stopped between the two writes or one of the files was edited: scoring would use one
+    threshold and counting the other, so this stops.
+    """
     source = beside(artifact, THRESHOLD_ENDING)
     if not source.exists():
         raise click.UsageError(f"{source} is missing; run select_threshold.py first.")
-    return float(json.loads(source.read_text(encoding="utf-8"))["min_votes"])
+    stored = float(json.loads(source.read_text(encoding="utf-8"))["min_votes"])
+    count = _count_node(yaml.safe_load(artifact.read_text(encoding="utf-8")), artifact)
+    counted = count.get("hparams", {}).get("min_votes")
+    if counted is None or float(counted) != stored:
+        raise click.UsageError(
+            f"{source} holds {stored:g} votes, but the Count node of {artifact.name} counts "
+            f"with {counted}; run select_threshold.py again."
+        )
+    return stored
 
 
 def store_metrics(artifact: Path, result: dict[str, Any], min_votes: float) -> None:

@@ -6,7 +6,7 @@ import math
 
 import pytest
 import torch
-from cuvis_ai_schemas.enums import ExecutionStage, NodeCategory
+from cuvis_ai_schemas.enums import ExecutionStage, NodeCategory, NodeTag
 from cuvis_ai_schemas.execution import Context, Metric
 from scenes import disc_instances
 
@@ -433,6 +433,8 @@ def test_runs_in_validation_and_test_only() -> None:
         {ExecutionStage.VAL, ExecutionStage.TEST}
     )
     assert CentroidDetectionMetrics._category == NodeCategory.METRIC
+    # The node keeps counts between calls and returns Python objects: not exportable.
+    assert NodeTag.ONNX not in CentroidDetectionMetrics._tags
 
 
 @pytest.mark.parametrize("bad", [[], [1.5], [30.0, 1.0], [math.nan], [30.0, 30.0]])
