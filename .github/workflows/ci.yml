@@ -35,8 +35,12 @@ jobs:
         with:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v3
-      # --locked uses the committed uv.lock. The chain tests need the sibling packages and run
-      # in their own job below.
+      # --locked uses the committed uv.lock, which is resolved with the cu128 index of the
+      # default `cuda` dependency group (see pyproject.toml). The jobs therefore do not pass
+      # --no-sources: without the source the lock would have to be resolved again, and
+      # --locked refuses that. The runner installs the CUDA build of torch and runs it on the
+      # CPU, as the cuvis-ai-unet workflow does. The chain tests need the sibling packages
+      # and run in their own job below.
       - name: Run tests
         run: |
           uv run --locked --extra dev pytest tests/ -m "not slow and not chain" -v --tb=long -ra \

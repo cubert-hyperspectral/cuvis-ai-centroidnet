@@ -41,11 +41,34 @@ uv pip install --no-deps \
   "cuvis-ai @ git+https://github.com/cubert-hyperspectral/cuvis-ai.git@main"
 ```
 
-cuvis-ai has to be a version that ships `VectorFieldVoteAccumulator` and `LocalMaximaSuppression`, which is later than 0.22.8. After this step run commands with `uv run --no-sync`, because a plain `uv run` puts the released cuvis-ai back.
+cuvis-ai has to be a build that ships `VectorFieldVoteAccumulator` and `LocalMaximaSuppression`. No release has them yet (0.22.9 is the newest). They come with [cuvis-ai pull request 206](https://github.com/cubert-hyperspectral/cuvis-ai/pull/206), and `main` has them once that pull request is merged. Until then, install the commit that the `chain` job pins as `CUVIS_AI_REF` in place of `main`. After this step run commands with `uv run --no-sync`, because a plain `uv run` puts the released cuvis-ai back.
 
 ## Plugin manifest
 
-`plugins.yaml` at the repository root is a bare manifest with a local path source. A pipeline lists the plugins it uses by name:
+`plugins.yaml` at the repository root is a bare manifest: the plugin name, its source and the node classes it provides. In a checkout the source is the local path:
+
+```yaml
+name: centroidnet
+package_name: cuvis-ai-centroidnet
+path: "."
+capabilities:
+- class_name: cuvis_ai_centroidnet.node.heads.CentroidNetHeads
+# one entry per node class
+```
+
+For a frozen install, replace `path` with the repository and a release tag. The first tag will be `v0.1.0`:
+
+```yaml
+name: centroidnet
+package_name: cuvis-ai-centroidnet
+repo: "https://github.com/cubert-hyperspectral/cuvis-ai-centroidnet.git"
+tag: "v0.1.0"
+capabilities:
+- class_name: cuvis_ai_centroidnet.node.heads.CentroidNetHeads
+# one entry per node class
+```
+
+A pipeline lists the plugins it uses by name:
 
 ```yaml
 plugins:
